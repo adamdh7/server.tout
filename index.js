@@ -1,6 +1,6 @@
-import express from "express";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { MongoClient } from "mongodb";
+const express = require("express");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { MongoClient } = require("mongodb");
 
 const s3 = new S3Client({
   region: "auto",
@@ -22,7 +22,7 @@ async function getDb() {
   return db;
 }
 
-async function processAndUploadImage(env, prompt) {
+async function processAndUploadImage(prompt) {
   await new Promise(resolve => setTimeout(resolve, 7));
   const aiRaw = await fetch("https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/black-forest-labs/flux-1-schnell", {
     method: "POST",
@@ -238,7 +238,7 @@ app.post("/ai", async (req, res) => {
               const keepAliveImg = setInterval(() => {
                 try { controller.enqueue(encoder.encode("• ")); } catch (e) {}
               }, 1000);
-              const imgUrl = await processAndUploadImage(null, prompt);
+              const imgUrl = await processAndUploadImage(prompt);
               clearInterval(keepAliveImg);
               const dbTag = `[IMAGES: ${imageIndex}]`;
               if (imgUrl) {
