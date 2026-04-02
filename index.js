@@ -494,10 +494,6 @@ export default {
               stream: true
             })
           });
-          const port = process.env.PORT || 3000;
-server.listen(port, () => {
-  console.log(`Serveur lancé sur le port ${port}`);
-});
           const aiResponseStream = aiRaw.body;
           let analysis = "";
           
@@ -529,6 +525,12 @@ server.listen(port, () => {
         } catch (e) {
           return new Response(JSON.stringify({ error: "Internal error during mathematical analysis" }), { status: 500, headers });
         }
+      }
+
+      if (url.pathname === "/ok" && request.method === "GET") {
+        const headers = new Headers(corsHeaders);
+        headers.set("Content-Type", "application/json");
+        return new Response(JSON.stringify({ ok: true }), { headers });
       }
     } catch (e) {
       const errorHeaders = { ...corsHeaders, "Content-Type": "application/json" };
