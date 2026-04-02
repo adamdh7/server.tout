@@ -90,15 +90,27 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-app.use((req, res, next) => {
+const corsAndOptions = (req, res, next) => {
+  const origin = req.headers.origin;
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": origin || "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+  res.set(corsHeaders);
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+};
+
+const requireAuth = (req, res, next) => {
   const origin = req.headers.origin;
   const userAgent = req.headers["user-agent"] || "";
   const authHeader = req.headers.authorization;
   const isBrowser = userAgent.includes("Mozilla") || req.headers["sec-fetch-mode"];
-  
   const originHost = origin ? new URL(origin).hostname : "";
   const isAllowedOrigin = originHost === "adamdh7.org" || originHost.endsWith(".adamdh7.org");
-  
   let authorized = false;
   if (isAllowedOrigin && isBrowser) {
     authorized = true;
@@ -106,27 +118,15 @@ app.use((req, res, next) => {
   if (authHeader === "Bearer adamdh7" || authHeader === "adamdh7") {
     authorized = true;
   }
-  
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": origin || "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
-  
-  res.set(corsHeaders);
-  
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-  
   if (!authorized) {
     return res.status(403).send("Forbidden: Invalid origin or missing token");
   }
-  
   next();
-});
+};
 
-app.get("/ai", async (req, res) => {
+app.use(corsAndOptions);
+
+app.get("/ai", requireAuth, async (req, res) => {
   const sess = req.query.session_id || "global";
   try {
     const database = await getDb();
@@ -159,7 +159,7 @@ app.get("/ai", async (req, res) => {
   }
 });
 
-app.post("/ai", async (req, res) => {
+app.post("/ai", requireAuth, async (req, res) => {
   res.set("Content-Type", "text/plain; charset=utf-8");
   let body = req.body;
   const userMessage = body.message?.trim();
@@ -433,7 +433,7 @@ app.post("/ai", async (req, res) => {
   }
 });
 
-app.post("/jerere", async (req, res) => {
+app.post("/jerere", requireAuth, async (req, res) => {
   let body;
   try {
     body = req.body;
@@ -479,7 +479,7 @@ app.post("/jerere", async (req, res) => {
   }
 });
 
-app.post("/calcul", async (req, res) => {
+app.post("/calcul", requireAuth, async (req, res) => {
   let body;
   try {
     body = req.body;
@@ -542,14 +542,14 @@ app.post("/calcul", async (req, res) => {
   }
 });
 
-app.get("/ok", (req, res) => {
+app.get("/ok", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
 app.put("/:filename", async (req, res) => {
   const filename = req.params.filename;
-  if (!filename || !/^TF-\d+\.png$/.test(filename)) {
-    return res.status(400).json({ error: "Invalid filename format. Must be TF-XXXXXX.png" });
+  if (!filename) {
+    return res.status(400).json({ error: "No filename provided" });
   }
   const getRawBody = () => new Promise((resolve, reject) => {
     const chunks = [];
@@ -562,16 +562,42 @@ app.put("/:filename", async (req, res) => {
     return res.status(400).json({ error: "No file data provided" });
   }
   try {
+    const randomNum = Math.floor(Math.random() * 10000000).toString();
+    const tfid = `TF-${randomNum}`;
+    const key = `${tfid}/${filename}`;
     await s3.send(new PutObjectCommand({
       Bucket: "tout",
-      Key: filename,
+      Key: key,
       Body: buffer,
-      ContentType: req.headers["content-type"] || "image/png"
+      ContentType: req.headers["content-type"] || "application/octet-stream"
     }));
-    const serverUrl = `https://server.tout.adamdh7.org/${filename}`;
-    res.json({ success: true, url: serverUrl });
+    const serverUrl = `https://server.tout.adamdh7.org/${key}`;
+    res.send(serverUrl);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/:tfid/:filename", async (req, res) => {
+  const tfid = req.params.tfid;
+  const filename = req.params.filename;
+  if (!tfid.startsWith("TF-") || !/^\d+$/.test(tfid.slice(3))) {
+    return res.status(404).send("Not found");
+  }
+  const key = `${tfid}/${filename}`;
+  try {
+    const command = new GetObjectCommand({
+      Bucket: "tout",
+      Key: key
+    });
+    const s3Response = await s3.send(command);
+    res.setHeader("Content-Type", s3Response.ContentType || "application/octet-stream");
+    if (s3Response.ContentLength) {
+      res.setHeader("Content-Length", s3Response.ContentLength);
+    }
+    s3Response.Body.pipe(res);
+  } catch (error) {
+    res.status(404).send("File not found");
   }
 });
 
