@@ -480,6 +480,7 @@ app.post("/jerere", requireAuth, async (req, res) => {
 });
 
 app.post("/calcul", requireAuth, async (req, res) => {
+  res.set("Content-Type", "text/plain; charset=utf-8");
   let body;
   try {
     body = req.body;
@@ -510,39 +511,39 @@ app.post("/calcul", requireAuth, async (req, res) => {
       })
     });
     const aiResponseStream = aiRaw.body;
-    let analysis = "";
-    
-    if (aiResponseStream && aiResponseStream.getReader) {
-      const reader = aiResponseStream.getReader();
-      const decoder = new TextDecoder();
-      let bufferCalcul = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        bufferCalcul += decoder.decode(value, { stream: true });
-        const lines = bufferCalcul.split('\n');
-        bufferCalcul = lines.pop();
-        for (const line of lines) {
-          const cleanLine = line.trim();
-          if (cleanLine.startsWith("data: ") && cleanLine !== "data: [DONE]") {
-            try {
-              const data = JSON.parse(cleanLine.slice(6));
-              if (data.response) analysis += data.response;
-            } catch(e) {}
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, 7));
-      }
-    } else {
-      analysis = "Unable to analyze the expression at this moment.";
+    if (!aiResponseStream || !aiResponseStream.getReader) {
+      res.end("Unable to analyze the expression at this moment.");
+      return;
     }
-    res.json({ result: analysis });
+    const reader = aiResponseStream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const cleanLine = line.trim();
+        if (cleanLine.startsWith("data: ") && cleanLine !== "data: [DONE]") {
+          try {
+            const data = JSON.parse(cleanLine.slice(6));
+            if (data.response) {
+              res.write(data.response);
+            }
+          } catch(e) {}
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 7));
+    }
+    res.end();
   } catch (e) {
-    res.status(500).json({ error: "Internal error during mathematical analysis" });
+    res.end("Internal error during mathematical analysis");
   }
 });
 
-app.get("/ok", requireAuth, (req, res) => {
+app.get("/ok", (req, res) => {
   res.json({ ok: true });
 });
 
