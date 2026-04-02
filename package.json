@@ -1,0 +1,12 @@
+{
+  "name": "server.tout",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "mongodb": "^6.5.0"
+  }
+}
