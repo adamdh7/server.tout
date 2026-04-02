@@ -494,7 +494,10 @@ export default {
               stream: true
             })
           });
-          
+          const port = process.env.PORT || 3000;
+server.listen(port, () => {
+  console.log(`Serveur lancé sur le port ${port}`);
+});
           const aiResponseStream = aiRaw.body;
           let analysis = "";
           
