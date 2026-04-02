@@ -164,8 +164,10 @@ app.post("/ai", requireAuth, async (req, res) => {
     "Content-Type": "text/plain; charset=utf-8",
     "Transfer-Encoding": "chunked",
     "Cache-Control": "no-cache",
-    "Connection": "keep-alive"
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
   });
+  res.flushHeaders();
   
   let body = req.body;
   const userMessage = body.message?.trim();
@@ -490,8 +492,10 @@ app.post("/calcul", requireAuth, async (req, res) => {
     "Content-Type": "text/plain; charset=utf-8",
     "Transfer-Encoding": "chunked",
     "Cache-Control": "no-cache",
-    "Connection": "keep-alive"
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
   });
+  res.flushHeaders();
   
   let body;
   try {
