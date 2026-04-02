@@ -161,18 +161,16 @@ app.get("/ai", requireAuth, async (req, res) => {
 
 app.post("/ai", requireAuth, async (req, res) => {
   res.set({
-    "Content-Type": "text/plain; charset=utf-8",
-    "Transfer-Encoding": "chunked",
-    "Cache-Control": "no-cache, no-store, must-revalidate",
-    "Pragma": "no-cache",
-    "Expires": "0",
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
     "X-Content-Type-Options": "nosniff"
   });
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   if (res.socket) res.socket.setNoDelay(true);
-  
+
   let body = req.body;
   const userMessage = body.message?.trim();
   const sess = body.session_id || "global";
@@ -218,227 +216,212 @@ app.post("/ai", requireAuth, async (req, res) => {
       })
     });
 
-    const aiResponseStream = aiRaw.body;
-    const encoder = new TextEncoder();
-    
-    const stream = new ReadableStream({
-      async start(controller) {
-        let isBuffering = false;
-        let buffer = "";
-        let frontendMessage = "";
-        let dbMessage = "";
-        let attachmentsToSave = [];
-        let imageIndex = 0;
-        let searchImageIndex = 0;
-        let allImages = [];
+    let frontendMessage = "";
+    let dbMessage = "";
+    let attachmentsToSave = [];
+    let imageIndex = 0;
+    let searchImageIndex = 0;
+    let allImages = [];
+    let isBuffering = false;
+    let buffer = "";
 
-        async function processChar(char) {
-          if (!isBuffering) {
-            if (char === '[') {
-              isBuffering = true;
-              buffer = "[";
-            } else {
-              controller.enqueue(encoder.encode(char));
-              frontendMessage += char;
-              dbMessage += char;
+    async function processChar(char) {
+      if (!isBuffering) {
+        if (char === '[') {
+          isBuffering = true;
+          buffer = "[";
+        } else {
+          res.write(JSON.stringify({ type: "final", content: char }) + "\n");
+          frontendMessage += char;
+          dbMessage += char;
+        }
+      } else {
+        buffer += char;
+        const tImg = "[IMAGE:";
+        const tSrc = "[SEARCH:";
+        if (char === ']') {
+          isBuffering = false;
+          if (buffer.startsWith(tImg)) {
+            const prompt = buffer.substring(7, buffer.length - 1).trim();
+            imageIndex++;
+            await new Promise(resolve => setTimeout(resolve, 7));
+            const keepAliveImg = setInterval(() => {
+              try { res.write(JSON.stringify({ type: "final", content: "• " }) + "\n"); } catch (e) {}
+            }, 1000);
+            const imgUrl = await processAndUploadImage(prompt);
+            clearInterval(keepAliveImg);
+            const dbTag = `[IMAGES: ${imageIndex}]`;
+            if (imgUrl) {
+              attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
             }
-          } else {
-            buffer += char;
-            const tImg = "[IMAGE:";
-            const tSrc = "[SEARCH:";
-            if (char === ']') {
-              isBuffering = false;
-              if (buffer.startsWith(tImg)) {
-                const prompt = buffer.substring(7, buffer.length - 1).trim();
-                imageIndex++;
-                await new Promise(resolve => setTimeout(resolve, 7));
-                const keepAliveImg = setInterval(() => {
-                  try { controller.enqueue(encoder.encode("• ")); } catch (e) {}
-                }, 1000);
-                const imgUrl = await processAndUploadImage(prompt);
-                clearInterval(keepAliveImg);
-                const dbTag = `[IMAGES: ${imageIndex}]`;
-                if (imgUrl) {
-                  attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
-                }
-                const replacement = imgUrl ? `\n\n${imgUrl}\n\n` : "";
-                controller.enqueue(encoder.encode(replacement));
-                frontendMessage += replacement;
-                dbMessage += dbTag;
-              } else if (buffer.startsWith(tSrc)) {
-                const query = buffer.substring(8, buffer.length - 1).trim();
-                await new Promise(resolve => setTimeout(resolve, 7));
-                const keepAliveSrc = setInterval(() => {
-                  try { controller.enqueue(encoder.encode("• ")); } catch (e) {}
-                }, 1000);
-                const searchRes = await performSearch(query);
-                clearInterval(keepAliveSrc);
-                let searchResultsText = "Query:\n" + query + "\nResults:\n" + searchRes.context + "\n\n";
-                if (searchRes.images && searchRes.images.length > 0) {
-                  allImages = allImages.concat(searchRes.images);
-                  searchResultsText += "Images URLs:\n" + searchRes.images.join("\n") + "\n\n";
-                  searchRes.images.forEach(imgUrl => {
-                    searchImageIndex++;
-                    const dbTag = `[IMAGES: SEARCH_${searchImageIndex}]`;
-                    attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
-                  });
-                }
-                const finalSystemPrompt = "You are Adam_D'H7. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
-                const contextLimit = context.slice(-6);
-                
-                try {
-                  const aiFinalRaw = await fetch("https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.1-8b-instruct", {
-                    method: "POST",
-                    headers: {
-                      "Authorization": "Bearer cfut_UZIu1b9rh4R44PlKSJAHs4JhRKq0h2d7lWjKCrcie67bcd42",
-                      "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                      messages: [
-                        { role: "system", content: finalSystemPrompt },
-                        ...contextLimit
-                      ],
-                      max_tokens: 3000,
-                      stream: true
-                    })
-                  });
-                  const aiFinalStream = aiFinalRaw.body;
-                  
-                  if (aiFinalStream && aiFinalStream.getReader) {
-                    const readerFinal = aiFinalStream.getReader();
-                    const decoderFinal = new TextDecoder();
-                    let bufferFinal = "";
-                    while (true) {
-                      const { done, value } = await readerFinal.read();
-                      if (done) break;
-                      bufferFinal += decoderFinal.decode(value, { stream: true });
-                      const linesFinal = bufferFinal.split('\n');
-                      bufferFinal = linesFinal.pop();
-                      for (const lineFinal of linesFinal) {
-                        const cleanLineFinal = lineFinal.trim();
-                        if (cleanLineFinal.startsWith("data: ") && cleanLineFinal !== "data: [DONE]") {
-                          try {
-                            const dataFinal = JSON.parse(cleanLineFinal.slice(6));
-                            if (dataFinal.response) {
-                              for (const c of dataFinal.response) {
-                                await processChar(c);
-                              }
-                            }
-                          } catch(e) {}
+            const replacement = imgUrl ? `\n\n${imgUrl}\n\n` : "";
+            res.write(JSON.stringify({ type: "final", content: replacement }) + "\n");
+            frontendMessage += replacement;
+            dbMessage += dbTag;
+          } else if (buffer.startsWith(tSrc)) {
+            const query = buffer.substring(8, buffer.length - 1).trim();
+            await new Promise(resolve => setTimeout(resolve, 7));
+            const keepAliveSrc = setInterval(() => {
+              try { res.write(JSON.stringify({ type: "final", content: "• " }) + "\n"); } catch (e) {}
+            }, 1000);
+            const searchRes = await performSearch(query);
+            clearInterval(keepAliveSrc);
+            let searchResultsText = "Query:\n" + query + "\nResults:\n" + searchRes.context + "\n\n";
+            if (searchRes.images && searchRes.images.length > 0) {
+              allImages = allImages.concat(searchRes.images);
+              searchResultsText += "Images URLs:\n" + searchRes.images.join("\n") + "\n\n";
+              searchRes.images.forEach(imgUrl => {
+                searchImageIndex++;
+                const dbTag = `[IMAGES: SEARCH_${searchImageIndex}]`;
+                attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
+              });
+            }
+            const finalSystemPrompt = "You are Adam_D'H7. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
+            const contextLimit = context.slice(-6);
+            
+            try {
+              const aiFinalRaw = await fetch("https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+                method: "POST",
+                headers: {
+                  "Authorization": "Bearer cfut_UZIu1b9rh4R44PlKSJAHs4JhRKq0h2d7lWjKCrcie67bcd42",
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                  messages: [
+                    { role: "system", content: finalSystemPrompt },
+                    ...contextLimit
+                  ],
+                  max_tokens: 3000,
+                  stream: true
+                })
+              });
+              const aiFinalStream = aiFinalRaw.body;
+              if (aiFinalStream && aiFinalStream.getReader) {
+                const readerFinal = aiFinalStream.getReader();
+                const decoderFinal = new TextDecoder();
+                let bufferFinal = "";
+                while (true) {
+                  const { done, value } = await readerFinal.read();
+                  if (done) break;
+                  bufferFinal += decoderFinal.decode(value, { stream: true });
+                  const linesFinal = bufferFinal.split('\n');
+                  bufferFinal = linesFinal.pop();
+                  for (const lineFinal of linesFinal) {
+                    const cleanLineFinal = lineFinal.trim();
+                    if (cleanLineFinal.startsWith("data: ") && cleanLineFinal !== "data: [DONE]") {
+                      try {
+                        const dataFinal = JSON.parse(cleanLineFinal.slice(6));
+                        if (dataFinal.response) {
+                          for (const c of dataFinal.response) {
+                            await processChar(c);
+                          }
                         }
-                      }
-                      await new Promise(resolve => setTimeout(resolve, 7));
+                      } catch(e) {}
                     }
                   }
-                } catch (e) {}
-              } else {
-                controller.enqueue(encoder.encode(buffer));
-                frontendMessage += buffer;
-                dbMessage += buffer;
-              }
-              buffer = "";
-            } else {
-              let pImg = tImg.startsWith(buffer);
-              let pSrc = tSrc.startsWith(buffer);
-              let iImg = buffer.startsWith(tImg);
-              let iSrc = buffer.startsWith(tSrc);
-              if (!pImg && !pSrc && !iImg && !iSrc) {
-                isBuffering = false;
-                controller.enqueue(encoder.encode(buffer));
-                frontendMessage += buffer;
-                dbMessage += buffer;
-                buffer = "";
-              }
-            }
-          }
-        }
-
-        if (aiResponseStream && aiResponseStream.getReader) {
-          const reader = aiResponseStream.getReader();
-          const decoder = new TextDecoder();
-          let bufferMain = "";
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              bufferMain += decoder.decode(value, { stream: true });
-              const lines = bufferMain.split('\n');
-              bufferMain = lines.pop();
-              for (const line of lines) {
-                const cleanLine = line.trim();
-                if (cleanLine.startsWith("data: ") && cleanLine !== "data: [DONE]") {
-                  try {
-                    const data = JSON.parse(cleanLine.slice(6));
-                    if (data.response) {
-                      for (const char of data.response) {
-                        await processChar(char);
-                      }
-                    }
-                  } catch(e) {}
+                  await new Promise(resolve => setTimeout(resolve, 7));
                 }
               }
-              await new Promise(resolve => setTimeout(resolve, 7));
-            }
-          } catch (e) {
-            const errMsg = "Stream error occurred.";
-            for (const char of errMsg) await processChar(char);
+            } catch (e) {}
+          } else {
+            res.write(JSON.stringify({ type: "final", content: buffer }) + "\n");
+            frontendMessage += buffer;
+            dbMessage += buffer;
           }
+          buffer = "";
         } else {
-          const errMsg = "Sorry, I could not generate a response.";
-          for (const char of errMsg) await processChar(char);
+          let pImg = tImg.startsWith(buffer);
+          let pSrc = tSrc.startsWith(buffer);
+          let iImg = buffer.startsWith(tImg);
+          let iSrc = buffer.startsWith(tSrc);
+          if (!pImg && !pSrc && !iImg && !iSrc) {
+            isBuffering = false;
+            res.write(JSON.stringify({ type: "final", content: buffer }) + "\n");
+            frontendMessage += buffer;
+            dbMessage += buffer;
+            buffer = "";
+          }
         }
+      }
+    }
 
-        if (isBuffering) {
-          controller.enqueue(encoder.encode(buffer));
-          frontendMessage += buffer;
-          dbMessage += buffer;
-        }
-
-        if (allImages.length > 0) {
-          allImages.forEach((imgUrl, idx) => {
-            const dbTag = `[IMAGES: SEARCH_${idx + 1}]`;
-            if (dbMessage.includes(imgUrl)) {
-              dbMessage = dbMessage.split(imgUrl).join(dbTag);
-              if (!attachmentsToSave.some(a => a.url === imgUrl)) {
-                attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
-              }
+    const aiResponseStream = aiRaw.body;
+    if (aiResponseStream && aiResponseStream.getReader) {
+      const reader = aiResponseStream.getReader();
+      const decoder = new TextDecoder();
+      let bufferMain = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bufferMain += decoder.decode(value, { stream: true });
+          const lines = bufferMain.split('\n');
+          bufferMain = lines.pop();
+          for (const line of lines) {
+            const cleanLine = line.trim();
+            if (cleanLine.startsWith("data: ") && cleanLine !== "data: [DONE]") {
+              try {
+                const data = JSON.parse(cleanLine.slice(6));
+                if (data.response) {
+                  for (const char of data.response) {
+                    await processChar(char);
+                  }
+                }
+              } catch(e) {}
             }
-          });
+          }
+          await new Promise(resolve => setTimeout(resolve, 7));
         }
+      } catch (e) {
+        const errMsg = "Stream error occurred.";
+        for (const char of errMsg) await processChar(char);
+      }
+    } else {
+      const errMsg = "Sorry, I could not generate a response.";
+      for (const char of errMsg) await processChar(char);
+    }
 
-        try {
-          const asstMsgId = Date.now().toString() + Math.random().toString();
-          await messagesCollection.insertOne({
-            id: asstMsgId,
-            role: "assistant",
-            content: dbMessage,
-            session_id: sess,
-            timestamp: new Date().toISOString()
+    if (isBuffering) {
+      res.write(JSON.stringify({ type: "final", content: buffer }) + "\n");
+      frontendMessage += buffer;
+      dbMessage += buffer;
+    }
+
+    if (allImages.length > 0) {
+      allImages.forEach((imgUrl, idx) => {
+        const dbTag = `[IMAGES: SEARCH_${idx + 1}]`;
+        if (dbMessage.includes(imgUrl)) {
+          dbMessage = dbMessage.split(imgUrl).join(dbTag);
+          if (!attachmentsToSave.some(a => a.url === imgUrl)) {
+            attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
+          }
+        }
+      });
+    }
+
+    try {
+      const asstMsgId = Date.now().toString() + Math.random().toString();
+      await messagesCollection.insertOne({
+        id: asstMsgId,
+        role: "assistant",
+        content: dbMessage,
+        session_id: sess,
+        timestamp: new Date().toISOString()
+      });
+      await new Promise(resolve => setTimeout(resolve, 7));
+      
+      if (attachmentsToSave.length > 0) {
+        for (const att of attachmentsToSave) {
+          await attachmentsCollection.insertOne({
+            message_id: asstMsgId,
+            placeholder: att.placeholder,
+            url: att.url
           });
           await new Promise(resolve => setTimeout(resolve, 7));
-          
-          if (attachmentsToSave.length > 0) {
-            for (const att of attachmentsToSave) {
-              await attachmentsCollection.insertOne({
-                message_id: asstMsgId,
-                placeholder: att.placeholder,
-                url: att.url
-              });
-              await new Promise(resolve => setTimeout(resolve, 7));
-            }
-          }
-        } catch (e) {}
-
-        controller.close();
+        }
       }
-    });
+    } catch (e) {}
 
-    const reader = stream.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(value);
-    }
     res.end();
   } catch (err) {
     res.end();
@@ -495,13 +478,14 @@ app.post("/calcul", requireAuth, async (req, res) => {
   res.set({
     "Content-Type": "text/plain; charset=utf-8",
     "Transfer-Encoding": "chunked",
-    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Cache-Control": "no-cache, no-transform",
     "Pragma": "no-cache",
     "Expires": "0",
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
     "X-Content-Type-Options": "nosniff"
   });
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   if (res.socket) res.socket.setNoDelay(true);
   
