@@ -163,14 +163,13 @@ app.post("/ai", requireAuth, async (req, res) => {
   res.set({
     "Content-Type": "text/plain; charset=utf-8",
     "Transfer-Encoding": "chunked",
-    "Cache-Control": "no-cache, no-transform",
+    "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache",
     "Expires": "0",
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
     "X-Content-Type-Options": "nosniff"
   });
-  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   if (res.socket) res.socket.setNoDelay(true);
   
@@ -496,14 +495,13 @@ app.post("/calcul", requireAuth, async (req, res) => {
   res.set({
     "Content-Type": "text/plain; charset=utf-8",
     "Transfer-Encoding": "chunked",
-    "Cache-Control": "no-cache, no-transform",
+    "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache",
     "Expires": "0",
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
     "X-Content-Type-Options": "nosniff"
   });
-  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   if (res.socket) res.socket.setNoDelay(true);
   
