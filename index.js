@@ -1,5 +1,5 @@
 const express = require("express");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { MongoClient } = require("mongodb");
 
 const s3 = new S3Client({
@@ -15,15 +15,11 @@ const mongoClient = new MongoClient("mongodb+srv://adamdh7:Tchengy1@adamdh7.hlvt
 let db;
 
 async function getDb() {
-  try {
-    if (!db) {
-      await mongoClient.connect();
-      db = mongoClient.db("chatdb");
-    }
-    return db;
-  } catch (error) {
-    throw error;
+  if (!db) {
+    await mongoClient.connect();
+    db = mongoClient.db("chatdb");
   }
+  return db;
 }
 
 async function processAndUploadImage(prompt) {
@@ -51,7 +47,7 @@ async function processAndUploadImage(prompt) {
       ContentType: "image/png"
     }));
     await new Promise(resolve => setTimeout(resolve, 7));
-    return `https://pub-71f8327fad474b50aa0cb0f764fa467f.r2.dev/${filename}`;
+    return `https://server.tout.adamdh7.org/${filename}`;
   } catch (error) {
     return "";
   }
@@ -113,7 +109,7 @@ app.use((req, res, next) => {
   
   const corsHeaders = {
     "Access-Control-Allow-Origin": origin || "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
   
@@ -476,7 +472,7 @@ app.post("/jerere", async (req, res) => {
     }));
     await new Promise(resolve => setTimeout(resolve, 7));
     
-    const returnedUrl = `https://pub-71f8327fad474b50aa0cb0f764fa467f.r2.dev/${filename}`;
+    const returnedUrl = `https://server.tout.adamdh7.org/${filename}`;
     res.json({ url: returnedUrl });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -548,6 +544,56 @@ app.post("/calcul", async (req, res) => {
 
 app.get("/ok", (req, res) => {
   res.json({ ok: true });
+});
+
+app.put("/:filename", async (req, res) => {
+  const filename = req.params.filename;
+  if (!filename || !/^TF-\d+\.png$/.test(filename)) {
+    return res.status(400).json({ error: "Invalid filename format. Must be TF-XXXXXX.png" });
+  }
+  const getRawBody = () => new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", chunk => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+  const buffer = await getRawBody();
+  if (buffer.length === 0) {
+    return res.status(400).json({ error: "No file data provided" });
+  }
+  try {
+    await s3.send(new PutObjectCommand({
+      Bucket: "tout",
+      Key: filename,
+      Body: buffer,
+      ContentType: req.headers["content-type"] || "image/png"
+    }));
+    const serverUrl = `https://server.tout.adamdh7.org/${filename}`;
+    res.json({ success: true, url: serverUrl });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/:filename", async (req, res) => {
+  const filename = req.params.filename;
+  if (!/^TF-\d+\.png$/.test(filename)) {
+    return res.status(404).send("Not found");
+  }
+  try {
+    const command = new GetObjectCommand({
+      Bucket: "tout",
+      Key: filename
+    });
+    const s3Response = await s3.send(command);
+    res.setHeader("Content-Type", s3Response.ContentType || "image/png");
+    if (s3Response.ContentLength) {
+      res.setHeader("Content-Length", s3Response.ContentLength);
+    }
+    s3Response.Body.pipe(res);
+  } catch (error) {
+    res.status(404).send("Image not found");
+  }
 });
 
 app.listen(PORT, () => {
