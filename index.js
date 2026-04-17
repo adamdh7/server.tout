@@ -230,15 +230,8 @@ function isBrowserLikeRequest(req) {
   const accept = (req.headers.accept || '').toLowerCase();
   const secFetchMode = (req.headers['sec-fetch-mode'] || '').toLowerCase();
   const secFetchDest = (req.headers['sec-fetch-dest'] || '').toLowerCase();
-  const secFetchSite = (req.headers['sec-fetch-site'] || '').toLowerCase();
 
-  return ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox') || ua.includes('edg') || ua.includes('opr') || accept.includes('text/html') || secFetchMode === 'navigate' || secFetchDest === 'document' || secFetchSite;
-}
-
-function acceptsHtml(req) {
-  const accept = (req.headers.accept || '').toLowerCase();
-  const secFetchDest = (req.headers['sec-fetch-dest'] || '').toLowerCase();
-  return accept.includes('text/html') && !['image', 'video', 'audio', 'style', 'script', 'font'].includes(secFetchDest);
+  return ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox') || ua.includes('edg') || ua.includes('opr') || accept.includes('text/html') || secFetchMode === 'navigate' || secFetchDest === 'document';
 }
 
 function hasValidToken(req) {
@@ -256,16 +249,19 @@ function hasTrustedBrowserOrigin(req) {
 }
 
 function canAccessPrivate(req) {
+  if (hasValidToken(req)) {
+    return { allowed: true, mode: 'token' };
+  }
+
   const browserLike = isBrowserLikeRequest(req);
   if (browserLike && hasTrustedBrowserOrigin(req)) {
     return { allowed: true, mode: 'browser' };
   }
-  if (hasValidToken(req)) {
-    return { allowed: true, mode: 'token' };
-  }
+
   if (browserLike) {
     return { allowed: false, reason: 'Forbidden: browser origin not allowed' };
   }
+
   return { allowed: false, reason: 'Forbidden: token required' };
 }
 
@@ -303,6 +299,10 @@ function corsAndOptions(req, res, next) {
 }
 
 app.use(corsAndOptions);
+
+function isReservedPublicName(name) {
+  return ['ok', 'health', 'ai', 'jerere', 'calcul', 'Tout.png', 'favicon.ico'].includes(name);
+}
 
 async function resourceExists(requestPath) {
   const key = cleanRequestPath(requestPath);
@@ -441,7 +441,7 @@ async function servePublicFile(req, res, requestPath) {
   const key = cleanRequestPath(requestPath);
   const filename = path.basename(key) || 'Tout';
 
-  const browserView = acceptsHtml(req);
+  const browserView = isBrowserLikeRequest(req) && (req.headers.accept || '').includes('text/html');
   const wantsRaw = req.query.raw === '1';
   const wantsTranscode = req.query.transcode === '1';
 
@@ -450,6 +450,7 @@ async function servePublicFile(req, res, requestPath) {
     if (!exists) {
       return sendUnknown(req, res);
     }
+
     const mediaMode = needsTranscode(filename) && FFMPEG_AVAILABLE ? 'transcode' : 'raw';
     const mediaUrl = buildMediaUrl(key, mediaMode);
     return res.status(200).type('html').send(buildViewerHtml(getDisplayName(key), mediaUrl, filename));
@@ -530,7 +531,7 @@ app.get('/ok', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, tokenRequiredForNonBrowser: true, trustedBrowserHosts: Array.from(TRUSTED_BROWSER_HOSTS) });
+  res.json({ ok: true, tokenRequiredForPrivateRoutes: true, trustedBrowserHosts: Array.from(TRUSTED_BROWSER_HOSTS) });
 });
 
 app.get('/Tout.png', async (req, res) => {
@@ -1012,26 +1013,33 @@ app.put('/:filename', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/:tfid/:filename', async (req, res) => {
+app.get('/:tfid/:filename', async (req, res, next) => {
   const tfid = req.params.tfid;
   const filename = req.params.filename;
+
   if (!tfid.startsWith('TF-') || !/^\d+$/.test(tfid.slice(3))) {
-    return res.status(404).send('Not found');
+    return next();
   }
+
   const key = `${tfid}/${filename}`;
+  const exists = await resourceExists(key);
+  if (!exists) {
+    return sendUnknown(req, res);
+  }
+
   return servePublicFile(req, res, key);
 });
 
-app.get('/:filename', async (req, res) => {
+app.get('/:filename', async (req, res, next) => {
   const filename = req.params.filename;
 
-  if (['ok', 'health', 'ai', 'jerere', 'calcul', 'Tout.png'].includes(filename)) {
-    return res.status(404).send('Not found');
+  if (isReservedPublicName(filename)) {
+    return next();
   }
 
   const exists = await resourceExists(filename);
   if (!exists) {
-    return res.status(404).send('Not found');
+    return next();
   }
 
   return servePublicFile(req, res, filename);
