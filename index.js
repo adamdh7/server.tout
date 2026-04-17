@@ -10,7 +10,7 @@ app.set('trust proxy', true);
 const PORT = process.env.PORT || 3000;
 const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
-const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org', 'localhost', '127.0.0.1', '::1']);
+const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org']);
 
 const s3 = new S3Client({
   region: 'auto',
