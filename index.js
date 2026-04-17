@@ -10,7 +10,7 @@ app.set('trust proxy', true);
 const PORT = process.env.PORT || 3000;
 const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
-const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org']);
+const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org', 'localhost', '127.0.0.1', '::1']);
 
 const s3 = new S3Client({
   region: 'auto',
@@ -211,11 +211,6 @@ function sendUnknown(req, res) {
   }
 }
 
-function getRequestHost(req) {
-  const raw = (req.headers['x-forwarded-host'] || req.headers.host || '').toString().split(',')[0].trim().toLowerCase();
-  return raw.split(':')[0];
-}
-
 function getUrlHost(value) {
   if (!value) return '';
   try {
@@ -244,8 +239,7 @@ function hasValidToken(req) {
 function hasTrustedBrowserOrigin(req) {
   const originHost = getUrlHost(req.headers.origin);
   const refererHost = getUrlHost(req.headers.referer);
-  const requestHost = getRequestHost(req);
-  return TRUSTED_BROWSER_HOSTS.has(originHost) || TRUSTED_BROWSER_HOSTS.has(refererHost) || TRUSTED_BROWSER_HOSTS.has(requestHost);
+  return TRUSTED_BROWSER_HOSTS.has(originHost) || TRUSTED_BROWSER_HOSTS.has(refererHost);
 }
 
 function canAccessPrivate(req) {
@@ -254,7 +248,9 @@ function canAccessPrivate(req) {
   }
 
   const browserLike = isBrowserLikeRequest(req);
-  if (browserLike && hasTrustedBrowserOrigin(req)) {
+  const hasTrustedOrigin = hasTrustedBrowserOrigin(req);
+
+  if (browserLike && hasTrustedOrigin) {
     return { allowed: true, mode: 'browser' };
   }
 
