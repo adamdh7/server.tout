@@ -2,17 +2,15 @@ const express = require('express');
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const { MongoClient } = require('mongodb');
 const { spawn, spawnSync } = require('child_process');
-const { Readable } = require('stream');
 const path = require('path');
-const fs = require('fs');
 
 const app = express();
 app.set('trust proxy', true);
 
 const PORT = process.env.PORT || 3000;
 const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
-const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org']);
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
+const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org']);
 
 const s3 = new S3Client({
   region: 'auto',
@@ -237,6 +235,12 @@ function isBrowserLikeRequest(req) {
   return ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox') || ua.includes('edg') || ua.includes('opr') || accept.includes('text/html') || secFetchMode === 'navigate' || secFetchDest === 'document' || secFetchSite;
 }
 
+function acceptsHtml(req) {
+  const accept = (req.headers.accept || '').toLowerCase();
+  const secFetchDest = (req.headers['sec-fetch-dest'] || '').toLowerCase();
+  return accept.includes('text/html') && !['image', 'video', 'audio', 'style', 'script', 'font'].includes(secFetchDest);
+}
+
 function hasValidToken(req) {
   const authHeader = (req.headers.authorization || '').trim();
   const customToken = (req.headers['x-tout-token'] || '').trim();
@@ -251,7 +255,7 @@ function hasTrustedBrowserOrigin(req) {
   return TRUSTED_BROWSER_HOSTS.has(originHost) || TRUSTED_BROWSER_HOSTS.has(refererHost) || TRUSTED_BROWSER_HOSTS.has(requestHost);
 }
 
-function canAccess(req) {
+function canAccessPrivate(req) {
   const browserLike = isBrowserLikeRequest(req);
   if (browserLike && hasTrustedBrowserOrigin(req)) {
     return { allowed: true, mode: 'browser' };
@@ -266,7 +270,7 @@ function canAccess(req) {
 }
 
 function requireAuth(req, res, next) {
-  const access = canAccess(req);
+  const access = canAccessPrivate(req);
   if (!access.allowed) {
     return res.status(403).send(access.reason);
   }
@@ -275,54 +279,75 @@ function requireAuth(req, res, next) {
 }
 
 function corsAndOptions(req, res, next) {
-  const access = canAccess(req);
   const origin = req.headers.origin;
-  if (access.allowed && origin) {
+  if (origin) {
     res.set({
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, PUT',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Tout-Token, Range',
       'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length, Content-Type',
-      'Vary': 'Origin'
+      Vary: 'Origin'
+    });
+  } else {
+    res.set({
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Tout-Token, Range',
+      'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length, Content-Type'
     });
   }
+
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
+
   next();
 }
 
 app.use(corsAndOptions);
 
-function serveS3RawFile(req, res, key, filename) {
-  const range = req.headers.range;
-  const params = {
-    Bucket: 'tout',
-    Key: key
-  };
-  if (range) {
-    params.Range = range;
+async function resourceExists(requestPath) {
+  const key = cleanRequestPath(requestPath);
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: 'tout', Key: key }));
+    return true;
+  } catch {
+    return false;
   }
-  return s3.send(new GetObjectCommand(params)).then(s3Response => {
+}
+
+async function serveS3RawFile(req, res, key, filename) {
+  try {
+    const range = req.headers.range;
+    const params = {
+      Bucket: 'tout',
+      Key: key
+    };
+
+    if (range) {
+      params.Range = range;
+    }
+
+    const s3Response = await s3.send(new GetObjectCommand(params));
     res.setHeader('Content-Type', s3Response.ContentType || contentTypeFromName(filename));
     res.setHeader('Accept-Ranges', 'bytes');
+
     if (s3Response.ContentRange) {
       res.setHeader('Content-Range', s3Response.ContentRange);
     }
+
     if (s3Response.ContentLength) {
       res.setHeader('Content-Length', s3Response.ContentLength);
     }
-    if (s3Response.ContentType) {
-      res.setHeader('Content-Type', s3Response.ContentType);
-    }
+
     res.status(range ? 206 : 200);
+
     if (!s3Response.Body) {
       return res.end();
     }
+
     s3Response.Body.pipe(res);
-  }).catch(() => {
+  } catch {
     sendUnknown(req, res);
-  });
+  }
 }
 
 function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
@@ -335,8 +360,10 @@ function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
       if (ffmpeg.stdin) ffmpeg.stdin.destroy();
     } catch {}
   };
+
   res.on('close', stop);
   res.on('finish', stop);
+
   if (inputStream && inputStream.on) {
     inputStream.on('error', stop);
   }
@@ -399,30 +426,40 @@ async function serveS3VideoTranscode(req, res, key) {
       Bucket: 'tout',
       Key: key
     }));
+
     if (!s3Response.Body) {
       return sendUnknown(req, res);
     }
+
     transcodeVideoStreamToMp4(s3Response.Body, res);
   } catch {
     sendUnknown(req, res);
   }
 }
 
-async function resourceExists(requestPath) {
+async function servePublicFile(req, res, requestPath) {
   const key = cleanRequestPath(requestPath);
-  try {
-    await s3.send(new HeadObjectCommand({ Bucket: 'tout', Key: key }));
-    return true;
-  } catch {
-    return false;
-  }
-}
+  const filename = path.basename(key) || 'Tout';
 
-async function servePage(req, res, requestPath, filename) {
-  const displayName = getDisplayName(requestPath);
-  const mediaMode = needsTranscode(filename) && FFMPEG_AVAILABLE ? 'transcode' : 'raw';
-  const mediaUrl = buildMediaUrl(requestPath, mediaMode);
-  return res.status(200).type('html').send(buildViewerHtml(displayName, mediaUrl, filename));
+  const browserView = acceptsHtml(req);
+  const wantsRaw = req.query.raw === '1';
+  const wantsTranscode = req.query.transcode === '1';
+
+  if (browserView && !wantsRaw && !wantsTranscode) {
+    const exists = await resourceExists(key);
+    if (!exists) {
+      return sendUnknown(req, res);
+    }
+    const mediaMode = needsTranscode(filename) && FFMPEG_AVAILABLE ? 'transcode' : 'raw';
+    const mediaUrl = buildMediaUrl(key, mediaMode);
+    return res.status(200).type('html').send(buildViewerHtml(getDisplayName(key), mediaUrl, filename));
+  }
+
+  if (wantsTranscode && needsTranscode(filename) && FFMPEG_AVAILABLE) {
+    return serveS3VideoTranscode(req, res, key);
+  }
+
+  return serveS3RawFile(req, res, key, filename);
 }
 
 async function processAndUploadImage(prompt) {
@@ -494,6 +531,23 @@ app.get('/ok', (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, tokenRequiredForNonBrowser: true, trustedBrowserHosts: Array.from(TRUSTED_BROWSER_HOSTS) });
+});
+
+app.get('/Tout.png', async (req, res) => {
+  try {
+    const object = await s3.send(new GetObjectCommand({ Bucket: 'tout', Key: 'Tout.png' }));
+    res.setHeader('Content-Type', object.ContentType || 'image/png');
+    if (object.ContentLength) {
+      res.setHeader('Content-Length', object.ContentLength);
+    }
+    if (object.Body) {
+      object.Body.pipe(res);
+      return;
+    }
+    res.status(404).send('Image not found');
+  } catch {
+    res.status(404).send('Image not found');
+  }
 });
 
 app.get('/ai', requireAuth, async (req, res) => {
@@ -926,26 +980,31 @@ app.put('/:filename', requireAuth, async (req, res) => {
   if (!filename) {
     return res.status(400).json({ error: 'No filename provided' });
   }
+
   const getRawBody = () => new Promise((resolve, reject) => {
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+
   const buffer = await getRawBody();
   if (buffer.length === 0) {
     return res.status(400).json({ error: 'No file data provided' });
   }
+
   try {
     const randomNum = Math.floor(Math.random() * 10000000).toString();
     const tfid = `TF-${randomNum}`;
     const key = `${tfid}/${filename}`;
+
     await s3.send(new PutObjectCommand({
       Bucket: 'tout',
       Key: key,
       Body: buffer,
       ContentType: req.headers['content-type'] || 'application/octet-stream'
     }));
+
     const serverUrl = `https://server.tout.adamdh7.org/${key}`;
     res.send(serverUrl);
   } catch (error) {
@@ -953,66 +1012,33 @@ app.put('/:filename', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/Tout.png', async (req, res) => {
-  const access = canAccess(req);
-  if (!access.allowed) {
-    return res.status(403).send(access.reason);
+app.get('/:tfid/:filename', async (req, res) => {
+  const tfid = req.params.tfid;
+  const filename = req.params.filename;
+  if (!tfid.startsWith('TF-') || !/^\d+$/.test(tfid.slice(3))) {
+    return res.status(404).send('Not found');
   }
-  const key = 'Tout.png';
-  try {
-    const object = await s3.send(new GetObjectCommand({ Bucket: 'tout', Key: key }));
-    res.setHeader('Content-Type', object.ContentType || 'image/png');
-    if (object.ContentLength) {
-      res.setHeader('Content-Length', object.ContentLength);
-    }
-    if (object.Body) {
-      object.Body.pipe(res);
-      return;
-    }
-    res.status(404).send('Image not found');
-  } catch {
-    res.status(404).send('Image not found');
-  }
+  const key = `${tfid}/${filename}`;
+  return servePublicFile(req, res, key);
 });
 
-app.get('*', async (req, res) => {
-  const access = canAccess(req);
-  if (!access.allowed) {
-    return res.status(403).send(access.reason);
+app.get('/:filename', async (req, res) => {
+  const filename = req.params.filename;
+
+  if (['ok', 'health', 'ai', 'jerere', 'calcul', 'Tout.png'].includes(filename)) {
+    return res.status(404).send('Not found');
   }
 
-  const requestPath = cleanRequestPath(req.path || '');
-  if (!requestPath) {
-    return sendUnknown(req, res);
-  }
-
-  const filename = path.basename(requestPath) || 'Tout';
-  const wantsRaw = req.query.raw === '1';
-  const wantsTranscode = req.query.transcode === '1';
-  const localStyleBrowser = access.mode === 'browser';
-  const key = requestPath;
-
-  if (!wantsRaw && !wantsTranscode && localStyleBrowser) {
-    const exists = await resourceExists(requestPath);
-    if (!exists) {
-      return sendUnknown(req, res);
-    }
-    return servePage(req, res, requestPath, filename);
-  }
-
-  if (wantsTranscode && needsTranscode(filename) && FFMPEG_AVAILABLE) {
-    return serveS3VideoTranscode(req, res, key);
-  }
-
-  if (isMediaLikeFile(filename) || wantsRaw || wantsTranscode) {
-    return serveS3RawFile(req, res, key, filename);
-  }
-
-  const exists = await resourceExists(requestPath);
+  const exists = await resourceExists(filename);
   if (!exists) {
-    return sendUnknown(req, res);
+    return res.status(404).send('Not found');
   }
-  return servePage(req, res, requestPath, filename);
+
+  return servePublicFile(req, res, filename);
+});
+
+app.use((req, res) => {
+  res.status(404).send('Not found');
 });
 
 app.listen(PORT, '0.0.0.0', () => {
