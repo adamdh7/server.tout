@@ -619,7 +619,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     await new Promise(resolve => setTimeout(resolve, 7));
     const context = recentMessages ? recentMessages.reverse().map(m => ({ role: m.role, content: m.content })) : [];
 
-    const systemPrompt = "You are Adam_D'H7. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
+    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
 
     const aiRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
       method: 'POST',
@@ -697,7 +697,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                 attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
               });
             }
-            const finalSystemPrompt = "You are Adam_D'H7. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
+            const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
             const contextLimit = context.slice(-6);
 
             try {
@@ -921,7 +921,7 @@ app.post('/calcul', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'No expression provided' });
   }
   try {
-    const systemPrompt = "You are Adam_D'H7, an expert polymath specializing in Mathematics, Physics, and all scientific calculations.\nCRITICAL RULES:\n1. LANGUAGE: Always respond in the exact same language used by the user.\n2. CONTEXT: Thoroughly analyze and incorporate any specific user notes, variables, or constraints provided to tailor the calculation.\n3. STEP-BY-STEP LOGIC: Do not just give the answer. Deconstruct the solution into a clear, numbered logical path. Explain the reasoning and formulas for every step.";
+    const systemPrompt = "You are Asistan, an expert polymath specializing in Mathematics, Physics, and all scientific calculations.\nCRITICAL RULES:\n1. LANGUAGE: Always respond in the exact same language used by the user.\n2. CONTEXT: Thoroughly analyze and incorporate any specific user notes, variables, or constraints provided to tailor the calculation.\n3. STEP-BY-STEP LOGIC: Do not just give the answer. Deconstruct the solution into a clear, numbered logical path. Explain the reasoning and formulas for every step.";
     const userPrompt = `"${calculation}"`;
 
     const aiRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.1-8b-instruct', {
