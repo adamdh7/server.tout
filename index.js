@@ -923,7 +923,20 @@ app.post('/compress', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Videyo sa a twò gwo' });
     }
     
-    let origFilename = req.query.filename || req.headers['x-file-name'] || '';
+    let origFilename = req.query.filename || 
+                       req.headers['x-file-name'] || 
+                       req.headers['x-filename'] || 
+                       req.headers['file-name'] || 
+                       '';
+
+    if (!origFilename && req.headers['content-disposition']) {
+      const cd = req.headers['content-disposition'];
+      const match = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';\r\n]+)["']?/i);
+      if (match) {
+        origFilename = match[1];
+      }
+    }
+
     console.log(`[COMPRESS FILENAME] Nom brut reçu: "${origFilename}"`);
 
     if (origFilename) {
@@ -963,8 +976,8 @@ app.post('/compress', requireAuth, async (req, res) => {
             operation: "convert", 
             input: "import-1", 
             output_format: outFormat,
-            video_codec: "x264",
-            crf: 32,
+            video_codec: "h264",
+            crf: 30,
             preset: "medium",
             audio_codec: "aac",
             audio_bitrate: "64k",
@@ -990,17 +1003,35 @@ app.post('/compress', requireAuth, async (req, res) => {
       };
     }
 
-    const jobPayloadSimple = {
-      tasks: {
-        "import-1": { operation: "import/url", url: sourceUrl },
-        "task-1": { 
-          operation: "convert", 
-          input: "import-1", 
-          output_format: outFormat
-        },
-        "export-1": { operation: "export/url", input: "task-1" }
-      }
-    };
+    let jobPayloadSimple;
+    if (isVideo) {
+      jobPayloadSimple = {
+        tasks: {
+          "import-1": { operation: "import/url", url: sourceUrl },
+          "task-1": { 
+            operation: "convert", 
+            input: "import-1", 
+            output_format: outFormat,
+            video_codec: "h264",
+            crf: 33
+          },
+          "export-1": { operation: "export/url", input: "task-1" }
+        }
+      };
+    } else {
+      jobPayloadSimple = {
+        tasks: {
+          "import-1": { operation: "import/url", url: sourceUrl },
+          "task-1": { 
+            operation: "convert", 
+            input: "import-1", 
+            output_format: outFormat,
+            quality: 50
+          },
+          "export-1": { operation: "export/url", input: "task-1" }
+        }
+      };
+    }
 
     const validKeys = CLOUDCONVERT_KEYS.filter(k => typeof k === 'string' && k.trim().length > 0);
     console.log(`[COMPRESS API KEYS] Clés CloudConvert actives: ${validKeys.length}`);
