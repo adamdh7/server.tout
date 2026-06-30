@@ -28,6 +28,8 @@ const s3 = new S3Client({
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 let db;
 
+const tasks = new Map();
+
 async function getDb() {
   if (!db) {
     await mongoClient.connect();
@@ -47,9 +49,14 @@ const FFMPEG_AVAILABLE = (() => {
 
 app.use(express.json({ limit: '25mb' }));
 
-const getRawBody = (req) => new Promise((resolve, reject) => {
+const getRawBody = (req, taskId) => new Promise((resolve, reject) => {
   const chunks = [];
-  req.on('data', chunk => chunks.push(chunk));
+  let received = 0;
+  req.on('data', chunk => {
+    chunks.push(chunk);
+    received += chunk.length;
+    if (taskId) tasks.set(taskId, { step: 'telechargement', received, total: req.headers['content-length'] });
+  });
   req.on('end', () => resolve(Buffer.concat(chunks)));
   req.on('error', reject);
 });
@@ -153,10 +160,6 @@ function needsTranscode(filename) {
   return ['.mov', '.mkv', '.avi', '.wmv', '.flv', '.3gp', '.ts', '.mpeg', '.mpg', '.m2ts'].includes(ext);
 }
 
-function isMediaLikeFile(filename) {
-  return isImageFile(filename) || isAudioFile(filename) || isPdfFile(filename) || isDirectVideoFile(filename) || needsTranscode(filename);
-}
-
 function encodePathSegments(requestPath) {
   return requestPath.split('/').map(part => encodeURIComponent(part)).join('/');
 }
@@ -168,22 +171,16 @@ function buildMediaUrl(requestPath, mode) {
 function getDisplayName(requestPath) {
   const clean = requestPath.replace(/^\/+/, '');
   const parts = clean.split('/').filter(Boolean);
-
-  if (parts.length === 0) {
-    return 'Tout';
-  }
-
+  if (parts.length === 0) return 'Tout';
   if (/^TF-/i.test(parts[0]) && parts[1]) {
     return path.basename(parts[1], path.extname(parts[1])).replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Tout';
   }
-
   return path.basename(parts[parts.length - 1], path.extname(parts[parts.length - 1])) || 'Tout';
 }
 
 function buildViewerHtml(title, mediaUrl, filename) {
   const safeTitle = String(title).replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let mediaBlock = '';
-  
   const isImg = isImageFile(filename);
   const isVid = isDirectVideoFile(filename) || needsTranscode(filename);
   const isAud = isAudioFile(filename);
@@ -198,7 +195,6 @@ function buildViewerHtml(title, mediaUrl, filename) {
     mediaBlock = `<a href="${mediaUrl}" style="color:#fff;font-family:Arial,sans-serif;word-break:break-all;text-decoration:none;font-size:18px;">${mediaUrl}</a>`;
   }
 
-  // Garantir que l'URL de téléchargement cible le fichier brut d'origine et évite les doubles extensions
   const downloadUrl = mediaUrl.replace('transcode=1', 'raw=1');
 
   return `<!doctype html>
@@ -216,74 +212,31 @@ html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; backgroun
 .wrap { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; position: relative; }
 img, video, audio { max-width: 100%; max-height: 100%; object-fit: contain; outline: none; }
 .download-btn {
-  position: absolute;
-  bottom: 30px;
-  z-index: 9999;
-  display: none; /* Masqué au départ pour les vidéos et audios */
-  background: rgba(255,255,255,0.2);
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255,255,255,0.3);
-  transition: opacity 0.3s ease, transform 0.2s ease;
-  cursor: pointer;
-  text-decoration: none;
+  position: absolute; bottom: 30px; z-index: 9999; display: none; background: rgba(255,255,255,0.2); width: 56px; height: 56px; border-radius: 50%; align-items: center; justify-content: center; color: #fff; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); transition: opacity 0.3s ease, transform 0.2s ease; cursor: pointer; text-decoration: none;
 }
-.download-btn:active {
-  transform: scale(0.9);
-}
-.download-btn svg {
-  width: 24px;
-  height: 24px;
-  fill: currentColor;
-}
+.download-btn:active { transform: scale(0.9); }
+.download-btn svg { width: 24px; height: 24px; fill: currentColor; }
 </style>
 </head>
 <body>
-<div class="wrap">
-${mediaBlock}
-</div>
+<div class="wrap">${mediaBlock}</div>
 <div style="display:flex; justify-content:center; width:100%;">
   <a id="download-btn" class="download-btn" href="${downloadUrl}" download="${filename}">
-    <svg viewBox="0 0 24 24">
-      <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/>
-    </svg>
+    <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
   </a>
 </div>
 <script>
-function forceDownload() {
-  window.location.href = "${downloadUrl}";
-}
+function forceDownload() { window.location.href = "${downloadUrl}"; }
 var mediaEl = document.getElementById('media-element');
 var btn = document.getElementById('download-btn');
-
 if (mediaEl) {
   mediaEl.addEventListener('error', forceDownload);
-  
-  if (mediaEl.tagName === 'IMG') {
-    // Les images chargent immédiatement, on affiche le bouton tout de suite
-    btn.style.display = 'flex';
-  } else {
-    // Pour les médias (vidéo/audio), on n'affiche le téléchargement qu'au début de la lecture réelle
-    mediaEl.addEventListener('playing', function() {
-      btn.style.display = 'flex';
-    });
-    // Fallback de sécurité au cas où l'événement playing est manqué
-    mediaEl.addEventListener('loadedmetadata', function() {
-      if (mediaEl.duration && mediaEl.currentTime > 0) {
-        btn.style.display = 'flex';
-      }
-    });
+  if (mediaEl.tagName === 'IMG') { btn.style.display = 'flex'; }
+  else {
+    mediaEl.addEventListener('playing', function() { btn.style.display = 'flex'; });
+    mediaEl.addEventListener('loadedmetadata', function() { if (mediaEl.duration && mediaEl.currentTime > 0) { btn.style.display = 'flex'; } });
   }
-} else {
-  // S'il n'y a pas d'élément média, afficher le bouton par défaut
-  btn.style.display = 'flex';
-}
+} else { btn.style.display = 'flex'; }
 </script>
 </body>
 </html>`;
@@ -299,11 +252,7 @@ function sendUnknown(req, res) {
 
 function getUrlHost(value) {
   if (!value) return '';
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch (e) {
-    return '';
-  }
+  try { return new URL(value).hostname.toLowerCase(); } catch (e) { return ''; }
 }
 
 function isBrowserLikeRequest(req) {
@@ -311,7 +260,6 @@ function isBrowserLikeRequest(req) {
   const accept = (req.headers.accept || '').toLowerCase();
   const secFetchMode = (req.headers['sec-fetch-mode'] || '').toLowerCase();
   const secFetchDest = (req.headers['sec-fetch-dest'] || '').toLowerCase();
-
   return ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox') || ua.includes('edg') || ua.includes('opr') || accept.includes('text/html') || secFetchMode === 'navigate' || secFetchDest === 'document';
 }
 
@@ -329,29 +277,17 @@ function hasTrustedBrowserOrigin(req) {
 }
 
 function canAccessPrivate(req) {
-  if (hasValidToken(req)) {
-    return { allowed: true, mode: 'token' };
-  }
-
+  if (hasValidToken(req)) return { allowed: true, mode: 'token' };
   const browserLike = isBrowserLikeRequest(req);
   const hasTrustedOrigin = hasTrustedBrowserOrigin(req);
-
-  if (browserLike && hasTrustedOrigin) {
-    return { allowed: true, mode: 'browser' };
-  }
-
-  if (browserLike) {
-    return { allowed: false, reason: 'Entèdi: orijin navigatè a pa otorize' };
-  }
-
+  if (browserLike && hasTrustedOrigin) return { allowed: true, mode: 'browser' };
+  if (browserLike) return { allowed: false, reason: 'Entèdi: orijin navigatè a pa otorize' };
   return { allowed: false, reason: 'Entèdi: ou dwe mete yon token' };
 }
 
 function requireAuth(req, res, next) {
   const access = canAccessPrivate(req);
-  if (!access.allowed) {
-    return res.status(403).send(access.reason);
-  }
+  if (!access.allowed) return res.status(403).send(access.reason);
   res.locals.accessMode = access.mode;
   next();
 }
@@ -372,18 +308,13 @@ function corsAndOptions(req, res, next) {
       'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length, Content-Type'
     });
   }
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 }
-
 app.use(corsAndOptions);
 
 function isReservedPublicName(name) {
-  return ['ok', 'health', 'ai', 'jerere', 'calcul', 'Tout.png', 'favicon.ico', 'qrcode', 'compress', 'resize', 'code', 'images-to-pdf'].includes(name.split('/')[0]);
+  return ['ok', 'health', 'ai', 'jerere', 'calcul', 'Tout.png', 'favicon.ico', 'qrcode', 'compress', 'resize', 'code', 'images-to-pdf', 'upload', 'status'].includes(name.split('/')[0]);
 }
 
 async function resourceExists(requestPath) {
@@ -399,33 +330,15 @@ async function resourceExists(requestPath) {
 async function serveS3RawFile(req, res, key, filename) {
   try {
     const range = req.headers.range;
-    const params = {
-      Bucket: 'tout',
-      Key: key
-    };
-
-    if (range) {
-      params.Range = range;
-    }
-
+    const params = { Bucket: 'tout', Key: key };
+    if (range) params.Range = range;
     const s3Response = await s3.send(new GetObjectCommand(params));
     res.setHeader('Content-Type', s3Response.ContentType || contentTypeFromName(filename));
     res.setHeader('Accept-Ranges', 'bytes');
-
-    if (s3Response.ContentRange) {
-      res.setHeader('Content-Range', s3Response.ContentRange);
-    }
-
-    if (s3Response.ContentLength) {
-      res.setHeader('Content-Length', s3Response.ContentLength);
-    }
-
+    if (s3Response.ContentRange) res.setHeader('Content-Range', s3Response.ContentRange);
+    if (s3Response.ContentLength) res.setHeader('Content-Length', s3Response.ContentLength);
     res.status(range ? 206 : 200);
-
-    if (!s3Response.Body) {
-      return res.end();
-    }
-
+    if (!s3Response.Body) return res.end();
     s3Response.Body.pipe(res);
   } catch (e) {
     sendUnknown(req, res);
@@ -435,20 +348,12 @@ async function serveS3RawFile(req, res, key, filename) {
 function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
   const stop = () => {
     abort();
-    try {
-      if (inputStream.destroy) inputStream.destroy();
-    } catch (e) {}
-    try {
-      if (ffmpeg.stdin) ffmpeg.stdin.destroy();
-    } catch (e) {}
+    try { if (inputStream.destroy) inputStream.destroy(); } catch (e) {}
+    try { if (ffmpeg.stdin) ffmpeg.stdin.destroy(); } catch (e) {}
   };
-
   res.on('close', stop);
   res.on('finish', stop);
-
-  if (inputStream && inputStream.on) {
-    inputStream.on('error', stop);
-  }
+  if (inputStream && inputStream.on) inputStream.on('error', stop);
 }
 
 function transcodeVideoStreamToMp4(inputStream, res) {
@@ -456,63 +361,27 @@ function transcodeVideoStreamToMp4(inputStream, res) {
     res.status(415).type('text/plain').send('Pa gen ffmpeg sou sèvè a');
     return;
   }
-
   res.status(200);
   res.setHeader('Content-Type', 'video/mp4');
   res.setHeader('Accept-Ranges', 'none');
-
-  const ffmpeg = spawn('ffmpeg', [
-    '-hide_banner',
-    '-loglevel', 'error',
-    '-i', 'pipe:0',
-    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-    '-f', 'mp4',
-    'pipe:1'
-  ], {
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-
-  const abort = () => {
-    try {
-      ffmpeg.kill('SIGKILL');
-    } catch (e) {}
-  };
-
+  const ffmpeg = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) {} };
   reqLikeCleanup(inputStream, ffmpeg, res, abort);
   inputStream.pipe(ffmpeg.stdin);
   ffmpeg.stdout.pipe(res);
-
   let stderr = '';
-  ffmpeg.stderr.on('data', chunk => {
-    stderr += chunk.toString();
-  });
-
+  ffmpeg.stderr.on('data', chunk => { stderr += chunk.toString(); });
   ffmpeg.on('close', code => {
-    if (code !== 0 && !res.headersSent) {
-      res.status(415).type('text/plain').send(stderr || 'Pa ka konvèti videyo sa a');
-    } else if (code !== 0 && !res.writableEnded) {
-      res.end();
-    }
+    if (code !== 0 && !res.headersSent) res.status(415).type('text/plain').send(stderr || 'Pa ka konvèti videyo sa a');
+    else if (code !== 0 && !res.writableEnded) res.end();
   });
-
-  ffmpeg.on('error', () => {
-    if (!res.headersSent) {
-      res.status(500).type('text/plain').send('Erè ffmpeg');
-    }
-  });
+  ffmpeg.on('error', () => { if (!res.headersSent) res.status(500).type('text/plain').send('Erè ffmpeg'); });
 }
 
 async function serveS3VideoTranscode(req, res, key) {
   try {
-    const s3Response = await s3.send(new GetObjectCommand({
-      Bucket: 'tout',
-      Key: key
-    }));
-
-    if (!s3Response.Body) {
-      return sendUnknown(req, res);
-    }
-
+    const s3Response = await s3.send(new GetObjectCommand({ Bucket: 'tout', Key: key }));
+    if (!s3Response.Body) return sendUnknown(req, res);
     transcodeVideoStreamToMp4(s3Response.Body, res);
   } catch (e) {
     sendUnknown(req, res);
@@ -522,36 +391,23 @@ async function serveS3VideoTranscode(req, res, key) {
 async function servePublicFile(req, res, requestPath) {
   const key = cleanRequestPath(requestPath);
   const filename = path.basename(key) || 'Tout';
-
   const browserView = isBrowserLikeRequest(req) && (req.headers.accept || '').includes('text/html');
   const wantsRaw = req.query.raw === '1';
   const wantsTranscode = req.query.transcode === '1';
-
-  if (wantsRaw) {
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  }
-
+  if (wantsRaw) res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   if (browserView && !wantsRaw && !wantsTranscode) {
     const exists = await resourceExists(key);
-    if (!exists) {
-      return sendUnknown(req, res);
-    }
-
+    if (!exists) return sendUnknown(req, res);
     const isImageOrVideo = isImageFile(filename) || isDirectVideoFile(filename) || needsTranscode(filename);
     if (!isImageOrVideo) {
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return serveS3RawFile(req, res, key, filename);
     }
-
     const mediaMode = needsTranscode(filename) && FFMPEG_AVAILABLE ? 'transcode' : 'raw';
     const mediaUrl = buildMediaUrl(key, mediaMode);
     return res.status(200).type('html').send(buildViewerHtml(getDisplayName(key), mediaUrl, filename));
   }
-
-  if (wantsTranscode && needsTranscode(filename) && FFMPEG_AVAILABLE) {
-    return serveS3VideoTranscode(req, res, key);
-  }
-
+  if (wantsTranscode && needsTranscode(filename) && FFMPEG_AVAILABLE) return serveS3VideoTranscode(req, res, key);
   return serveS3RawFile(req, res, key, filename);
 }
 
@@ -560,10 +416,7 @@ async function processAndUploadImage(prompt) {
     await new Promise(resolve => setTimeout(resolve, 7));
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: prompt, num_steps: 4 })
     });
     if (!aiRaw.ok) return '';
@@ -574,12 +427,7 @@ async function processAndUploadImage(prompt) {
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
     const randomNum = Math.floor(Math.random() * 10000000).toString();
     const filename = `TF-${randomNum}.png`;
-    await s3.send(new PutObjectCommand({
-      Bucket: 'tout',
-      Key: filename,
-      Body: bytes,
-      ContentType: 'image/png'
-    }));
+    await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: filename, Body: bytes, ContentType: 'image/png' }));
     await new Promise(resolve => setTimeout(resolve, 7));
     return `https://server.tout.adamdh7.org/${filename}`;
   } catch (e) {
@@ -600,17 +448,11 @@ async function performSearch(query) {
     let text = '';
     let foundImages = [];
     let foundLinks = [];
-    if (data.images && data.images.length > 0) {
-      foundImages = data.images;
-    }
-    if (!data.results) {
-      return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
-    }
+    if (data.images && data.images.length > 0) foundImages = data.images;
+    if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
     for (const r of data.results) {
       text += 'URL: ' + (r.url || 'Lyen pa disponib') + '\nContenu: ' + r.content + '\n\n';
-      if (r.url) {
-        foundLinks.push(r.url);
-      }
+      if (r.url) foundLinks.push(r.url);
     }
     return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
   } catch (e) {
@@ -618,9 +460,13 @@ async function performSearch(query) {
   }
 }
 
-app.get('/ok', (req, res) => {
-  res.json({ ok: true });
+app.get('/status/:taskId', (req, res) => {
+  const task = tasks.get(req.params.taskId);
+  if (task) res.json(task);
+  else res.status(404).json({ error: 'Nou pa jwenn okenn travay' });
 });
+
+app.get('/ok', (req, res) => res.json({ ok: true }));
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, tokenRequiredForPrivateRoutes: true, trustedBrowserHosts: Array.from(TRUSTED_BROWSER_HOSTS) });
@@ -630,9 +476,7 @@ app.get('/Tout.png', async (req, res) => {
   try {
     const object = await s3.send(new GetObjectCommand({ Bucket: 'tout', Key: 'Tout.png' }));
     res.setHeader('Content-Type', object.ContentType || 'image/png');
-    if (object.ContentLength) {
-      res.setHeader('Content-Length', object.ContentLength);
-    }
+    if (object.ContentLength) res.setHeader('Content-Length', object.ContentLength);
     if (object.Body) {
       object.Body.pipe(res);
       return;
@@ -649,19 +493,14 @@ app.get('/ai', requireAuth, async (req, res) => {
     const database = await getDb();
     const messagesCollection = database.collection('messages');
     const attachmentsCollection = database.collection('attachments');
-
     const messages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: 1 }).toArray();
     await new Promise(resolve => setTimeout(resolve, 7));
-
     const messageIds = messages.map(m => m.id);
     const attachments = await attachmentsCollection.find({ message_id: { $in: messageIds } }).toArray();
-
     const messagesMap = new Map();
     if (messages) {
       for (const row of messages) {
-        if (!messagesMap.has(row.id)) {
-          messagesMap.set(row.id, { role: row.role, content: row.content, timestamp: row.timestamp });
-        }
+        if (!messagesMap.has(row.id)) messagesMap.set(row.id, { role: row.role, content: row.content, timestamp: row.timestamp });
       }
       for (const att of attachments) {
         if (messagesMap.has(att.message_id) && att.placeholder && att.url) {
@@ -691,46 +530,39 @@ app.post('/ai', requireAuth, async (req, res) => {
   const body = req.body;
   const userMessage = body.message?.trim();
   const sess = body.session_id || 'global';
-  if (!userMessage) {
-    res.status(400).json({ error: 'Ou bay yon mesaj vid' });
-    return;
-  }
+  if (!userMessage) return res.status(400).json({ error: 'Ou bay yon mesaj vid' });
 
   try {
     const database = await getDb();
     const messagesCollection = database.collection('messages');
     const attachmentsCollection = database.collection('attachments');
     const userMsgId = Date.now().toString() + Math.random().toString();
-
     await messagesCollection.insertOne({
-      id: userMsgId,
-      role: 'user',
-      content: userMessage,
-      session_id: sess,
-      timestamp: new Date().toISOString()
+      id: userMsgId, role: 'user', content: userMessage, session_id: sess, timestamp: new Date().toISOString()
     });
     await new Promise(resolve => setTimeout(resolve, 7));
 
-    const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(7).toArray();
+    const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(30).toArray();
     await new Promise(resolve => setTimeout(resolve, 7));
-    const context = recentMessages ? recentMessages.reverse().map(m => ({ role: m.role, content: m.content })) : [];
+    
+    let totalLength = 0;
+    const validContext = [];
+    if (recentMessages) {
+        for (const m of recentMessages) {
+            const l = (m.content || '').length + (m.role || '').length;
+            if (totalLength + l > 7000) break;
+            validContext.push(m);
+            totalLength += l;
+        }
+    }
+    const context = validContext.reverse().map(m => ({ role: m.role, content: m.content }));
 
     const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...context
-        ],
-        max_tokens: 3000,
-        stream: true
-      })
+      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true })
     });
 
     let frontendMessage = '';
@@ -763,15 +595,11 @@ app.post('/ai', requireAuth, async (req, res) => {
             const prompt = buffer.substring(7, buffer.length - 1).trim();
             imageIndex++;
             await new Promise(resolve => setTimeout(resolve, 7));
-            const keepAliveImg = setInterval(() => {
-              try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {}
-            }, 1000);
+            const keepAliveImg = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
             const imgUrl = await processAndUploadImage(prompt);
             clearInterval(keepAliveImg);
             const dbTag = `[IMAGES: ${imageIndex}]`;
-            if (imgUrl) {
-              attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
-            }
+            if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
             const replacement = imgUrl ? `\n\n${imgUrl}\n\n` : '';
             res.write(JSON.stringify({ type: 'final', content: replacement }) + '\n');
             frontendMessage += replacement;
@@ -779,9 +607,7 @@ app.post('/ai', requireAuth, async (req, res) => {
           } else if (buffer.startsWith(tSrc)) {
             const query = buffer.substring(8, buffer.length - 1).trim();
             await new Promise(resolve => setTimeout(resolve, 7));
-            const keepAliveSrc = setInterval(() => {
-              try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {}
-            }, 1000);
+            const keepAliveSrc = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
             const searchRes = await performSearch(query);
             clearInterval(keepAliveSrc);
             let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
@@ -800,18 +626,8 @@ app.post('/ai', requireAuth, async (req, res) => {
             try {
               const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
                 method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                  messages: [
-                    { role: 'system', content: finalSystemPrompt },
-                    ...contextLimit
-                  ],
-                  max_tokens: 3000,
-                  stream: true
-                })
+                headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true })
               });
               if (!aiFinalRaw.ok) {
                 const errMsg = "Sistèm sa a pa disponib kounye a.";
@@ -835,9 +651,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                       try {
                         const dataFinal = JSON.parse(cleanLineFinal.slice(6));
                         if (dataFinal.response) {
-                          for (const c of dataFinal.response) {
-                            await processChar(c);
-                          }
+                          for (const c of dataFinal.response) await processChar(c);
                         }
                       } catch (e) {}
                     }
@@ -890,9 +704,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                 try {
                   const data = JSON.parse(cleanLine.slice(6));
                   if (data.response) {
-                    for (const char of data.response) {
-                      await processChar(char);
-                    }
+                    for (const char of data.response) await processChar(char);
                   }
                 } catch (e) {}
               }
@@ -920,9 +732,7 @@ app.post('/ai', requireAuth, async (req, res) => {
         const dbTag = `[IMAGES: SEARCH_${idx + 1}]`;
         if (dbMessage.includes(imgUrl)) {
           dbMessage = dbMessage.split(imgUrl).join(dbTag);
-          if (!attachmentsToSave.some(a => a.url === imgUrl)) {
-            attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
-          }
+          if (!attachmentsToSave.some(a => a.url === imgUrl)) attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
         }
       });
     }
@@ -930,26 +740,17 @@ app.post('/ai', requireAuth, async (req, res) => {
     try {
       const asstMsgId = Date.now().toString() + Math.random().toString();
       await messagesCollection.insertOne({
-        id: asstMsgId,
-        role: 'assistant',
-        content: dbMessage,
-        session_id: sess,
-        timestamp: new Date().toISOString()
+        id: asstMsgId, role: 'assistant', content: dbMessage, session_id: sess, timestamp: new Date().toISOString()
       });
       await new Promise(resolve => setTimeout(resolve, 7));
 
       if (attachmentsToSave.length > 0) {
         for (const att of attachmentsToSave) {
-          await attachmentsCollection.insertOne({
-            message_id: asstMsgId,
-            placeholder: att.placeholder,
-            url: att.url
-          });
+          await attachmentsCollection.insertOne({ message_id: asstMsgId, placeholder: att.placeholder, url: att.url });
           await new Promise(resolve => setTimeout(resolve, 7));
         }
       }
     } catch (e) {}
-
     res.end();
   } catch (e) {
     res.end();
@@ -958,48 +759,26 @@ app.post('/ai', requireAuth, async (req, res) => {
 
 app.post('/jerere', requireAuth, async (req, res) => {
   let body;
-  try {
-    body = req.body;
-  } catch (e) {
-    return res.status(400).json({ error: 'Fòma JSON pa valab' });
-  }
+  try { body = req.body; } catch (e) { return res.status(400).json({ error: 'Fòma JSON pa valab' }); }
   const prompt = body.prompt?.trim();
   if (!prompt) return res.status(400).json({ error: 'Ou pa bay okenn enstriksyon (prompt)' });
-
   try {
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: prompt, num_steps: 4 })
     });
-    if (!aiRaw.ok) {
-      return res.status(503).json({ error: "Sistèm sa a pa disponib kounye a." });
-    }
+    if (!aiRaw.ok) return res.status(503).json({ error: "Sistèm sa a pa disponib kounye a." });
     const aiResponse = await aiRaw.json();
     await new Promise(resolve => setTimeout(resolve, 7));
-
-    if (!aiResponse || !aiResponse.result || !aiResponse.result.image) {
-      throw new Error("Entèlijans atifisyèl la pa bay yon imaj ki valab.");
-    }
+    if (!aiResponse || !aiResponse.result || !aiResponse.result.image) throw new Error("Entèlijans atifisyèl la pa bay yon imaj ki valab.");
     const binaryString = atob(aiResponse.result.image);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-
     const randomNum = Math.floor(Math.random() * 10000000).toString();
     const filename = `TF-${randomNum}.png`;
-
-    await s3.send(new PutObjectCommand({
-      Bucket: 'tout',
-      Key: filename,
-      Body: bytes,
-      ContentType: 'image/png'
-    }));
+    await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: filename, Body: bytes, ContentType: 'image/png' }));
     await new Promise(resolve => setTimeout(resolve, 7));
-
-    const returnedUrl = `https://server.tout.adamdh7.org/${filename}`;
-    res.json({ url: returnedUrl });
+    res.json({ url: `https://server.tout.adamdh7.org/${filename}` });
   } catch (error) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1021,33 +800,17 @@ app.post('/calcul', requireAuth, async (req, res) => {
   if (res.socket) res.socket.setNoDelay(true);
 
   let body;
-  try {
-    body = req.body;
-  } catch (e) {
-    return res.status(400).json({ error: 'Fòma JSON pa valab' });
-  }
+  try { body = req.body; } catch (e) { return res.status(400).json({ error: 'Fòma JSON pa valab' }); }
   const calculation = body.calculation?.trim();
-  if (!calculation) {
-    return res.status(400).json({ error: 'Ou pa bay okenn ekspresyon matematik' });
-  }
+  if (!calculation) return res.status(400).json({ error: 'Ou pa bay okenn ekspresyon matematik' });
   try {
     const systemPrompt = "You are Asistan, an expert polymath specializing in Mathematics, Physics, and all scientific calculations.\nCRITICAL RULES:\n1. LANGUAGE: Always respond in the exact same language used by the user.\n2. CONTEXT: Thoroughly analyze and incorporate any specific user notes, variables, or constraints provided to tailor the calculation.\n3. STEP-BY-STEP LOGIC: Do not just give the answer. Deconstruct the solution into a clear, numbered logical path. Explain the reasoning and formulas for every step.";
     const userPrompt = `"${calculation}"`;
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        max_tokens: 3000,
-        stream: true
-      })
+      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], max_tokens: 3000, stream: true })
     });
     if (!aiRaw.ok) {
       res.write("Sistèm sa a pa disponib kounye a.");
@@ -1104,81 +867,139 @@ app.post('/qrcode', requireAuth, async (req, res) => {
 app.post('/compress', requireAuth, async (req, res) => {
   let tmpIn;
   let tmpOut;
+  const taskId = req.query.taskId;
   try {
-    const buffer = await getRawBody(req);
+    if (taskId) tasks.set(taskId, { step: 'kòmanse' });
+    const buffer = await getRawBody(req, taskId);
     if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
     const isVideo = req.query.type === 'video';
-    if (isVideo && buffer.length > 52428800) {
-      return res.status(400).json({ error: 'Videyo sa a twò gwo pou konprese l' });
-    }
+    if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
+    
     const extIn = isVideo ? 'mp4' : 'png';
     const extOut = isVideo ? 'mp4' : 'jpg';
     tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${extIn}`);
     tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}.${extOut}`);
     fs.writeFileSync(tmpIn, buffer);
-    if (isVideo) {
-      spawnSync('ffmpeg', ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '32', '-preset', 'faster', tmpOut]);
-    } else {
-      spawnSync('ffmpeg', ['-i', tmpIn, '-q:v', '5', '-y', tmpOut]);
-    }
-
-    const inSize = fs.statSync(tmpIn).size;
-    let outSize = 0;
-    try {
-      outSize = fs.statSync(tmpOut).size;
-    } catch (e) {}
-
-    let finalBuf = buffer;
-    let finalExt = extIn;
-    let finalType = isVideo ? 'video/mp4' : 'image/png';
-
-    if (outSize > 0 && outSize < inSize) {
-      finalBuf = fs.readFileSync(tmpOut);
-      finalExt = extOut;
-      finalType = isVideo ? 'video/mp4' : 'image/jpeg';
-    }
+    if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
-    const url = await saveEphemeral(finalBuf, finalType, finalExt);
-    res.json({ url });
+    const args = isVideo ? ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '32', '-preset', 'faster', tmpOut] : ['-i', tmpIn, '-q:v', '5', '-y', tmpOut];
+    const child = spawn('ffmpeg', args);
+    
+    child.on('close', async (code) => {
+      if (code !== 0) {
+        if (taskId) tasks.set(taskId, { step: 'erè' });
+        try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
+        try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
+        return res.status(500).json({ error: 'Echek pandan konpresyon an' });
+      }
+      try {
+        const inSize = fs.statSync(tmpIn).size;
+        let outSize = fs.statSync(tmpOut).size;
+        let finalBuf = buffer;
+        let finalExt = extIn;
+        let finalType = isVideo ? 'video/mp4' : 'image/png';
+        if (outSize > 0 && outSize < inSize) {
+          finalBuf = fs.readFileSync(tmpOut);
+          finalExt = extOut;
+          finalType = isVideo ? 'video/mp4' : 'image/jpeg';
+        }
+        if (taskId) tasks.set(taskId, { step: 'sovgade' });
+        const url = await saveEphemeral(finalBuf, finalType, finalExt);
+        if (taskId) tasks.set(taskId, { step: 'fini', url });
+        res.json({ url });
+      } catch (e) {
+        res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
+      } finally {
+        try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
+        try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
-  } finally {
-    try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
-    try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
   }
 });
 
 app.post('/resize', requireAuth, async (req, res) => {
   let tmpImg;
+  const taskId = req.query.taskId;
   try {
-    const buffer = await getRawBody(req);
+    if (taskId) tasks.set(taskId, { step: 'kòmanse' });
+    const buffer = await getRawBody(req, taskId);
     if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
     const width = req.query.width;
     const height = req.query.height;
     tmpImg = path.join(os.tmpdir(), `in-res-${Date.now()}.png`);
     fs.writeFileSync(tmpImg, buffer);
+    if (taskId) tasks.set(taskId, { step: 'redimansyon' });
+
     if (width && height) {
       const outImg = path.join(os.tmpdir(), `out-res-${Date.now()}.png`);
-      spawnSync('ffmpeg', ['-i', tmpImg, '-vf', `scale=${width}:${height}`, outImg]);
-      const outBuf = fs.readFileSync(outImg);
-      const url = await saveEphemeral(outBuf, 'image/png', 'png');
-      try { fs.unlinkSync(outImg); } catch (e) {}
-      return res.json({ url });
+      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${width}:${height}`, outImg]);
+      child.on('close', async (code) => {
+        try {
+          if (code !== 0) throw new Error('Echek');
+          const outBuf = fs.readFileSync(outImg);
+          if (taskId) tasks.set(taskId, { step: 'sovgade' });
+          const url = await saveEphemeral(outBuf, 'image/png', 'png');
+          if (taskId) tasks.set(taskId, { step: 'fini', url });
+          res.json({ url });
+        } catch (e) {
+          res.status(500).json({ error: "Erè redimansyon" });
+        } finally {
+          try { fs.unlinkSync(tmpImg); } catch (e) {}
+          try { fs.unlinkSync(outImg); } catch (e) {}
+        }
+      });
+      return;
     }
     const sizes = [192, 512, 1024, 2024];
     const urls = [];
+    let completed = 0;
     for (const s of sizes) {
       const outImg = path.join(os.tmpdir(), `out-res-${s}-${Date.now()}.png`);
-      spawnSync('ffmpeg', ['-i', tmpImg, '-vf', `scale=${s}:${s}`, outImg]);
-      const outBuf = fs.readFileSync(outImg);
-      urls.push(await saveEphemeral(outBuf, 'image/png', 'png'));
-      try { fs.unlinkSync(outImg); } catch (e) {}
+      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${s}:${s}`, outImg]);
+      child.on('close', async (code) => {
+        try {
+          if (code === 0) {
+            const outBuf = fs.readFileSync(outImg);
+            urls.push(await saveEphemeral(outBuf, 'image/png', 'png'));
+          }
+        } catch (e) {}
+        try { fs.unlinkSync(outImg); } catch (e) {}
+        completed++;
+        if (completed === sizes.length) {
+          try { fs.unlinkSync(tmpImg); } catch (e) {}
+          if (taskId) tasks.set(taskId, { step: 'fini', urls });
+          res.json({ urls });
+        }
+      });
     }
-    res.json({ urls });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
-  } finally {
-    try { if (tmpImg) fs.unlinkSync(tmpImg); } catch (e) {}
+  }
+});
+
+app.post('/upload', requireAuth, async (req, res) => {
+  const taskId = req.query.taskId;
+  try {
+    if (taskId) tasks.set(taskId, { step: 'kòmanse' });
+    const buffer = await getRawBody(req, taskId);
+    let fileBuffer = buffer;
+    const ct = req.headers['content-type'] || '';
+    if (ct.includes('multipart/form-data')) {
+      const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'));
+      const footerStart = buffer.lastIndexOf(Buffer.from('\r\n--'));
+      if (headerEnd !== -1 && footerStart !== -1) {
+        fileBuffer = buffer.subarray(headerEnd + 4, footerStart);
+      }
+    }
+    if (taskId) tasks.set(taskId, { step: 'sovgade' });
+    const url = await saveEphemeral(fileBuffer, 'application/pdf', 'pdf');
+    if (taskId) tasks.set(taskId, { step: 'fini', url });
+    res.json({ url });
+  } catch (e) {
+    if (taskId) tasks.set(taskId, { step: 'erè' });
+    res.status(500).json({ error: "Erè pandan telechargement an" });
   }
 });
 
@@ -1189,29 +1010,19 @@ app.post('/code/search', requireAuth, (req, res) => {
     const lines = bodyCode.split('\n');
     const results = [];
     const qWords = query.split(/\s+/).filter(Boolean);
-
     lines.forEach((line, index) => {
       const t = line.toLowerCase();
       let score = 0;
-      if (t.includes(query)) {
-        score += 1000;
-      }
+      if (t === query) score += 5000;
+      if (t.includes(query)) score += 1000;
       let wordMatches = 0;
-      qWords.forEach(w => {
-        if (t.includes(w)) wordMatches++;
-      });
-      score += (wordMatches * 50);
+      qWords.forEach(w => { if (t.includes(w)) wordMatches++; });
+      score += (wordMatches * 100);
       let charMatches = 0;
-      for (let i = 0; i < query.length; i++) {
-        if (t.includes(query[i])) charMatches++;
-      }
+      for (let i = 0; i < query.length; i++) { if (t.includes(query[i])) charMatches++; }
       score += charMatches;
-
-      if (score > (query.length * 0.3) && line.trim().length > 0) {
-        results.push({ text: `${index + 1} : ${line.trim()}`, score });
-      }
+      if (score > (query.length * 0.5) && line.trim().length > 0) results.push({ text: `${index + 1} : ${line.trim()}`, score });
     });
-
     results.sort((a, b) => b.score - a.score);
     res.json({ results: results.map(r => r.text) });
   } catch (e) {
@@ -1224,18 +1035,21 @@ app.post('/code/syntax', requireAuth, (req, res) => {
     const bodyCode = req.body.code || '';
     const type = req.body.type || 'js';
     let errors = [];
-
     const getLineCol = (str, index) => {
       const upTo = str.slice(0, index);
       const linesCount = upTo.split('\n');
       return `liy ${linesCount.length}`;
     };
-
     if (type === 'js') {
       try {
-        new vm.Script(bodyCode);
+        new vm.Script(bodyCode, { filename: 'script.js' });
       } catch (err) {
-        errors.push(err.message);
+        let lineTarget = '?';
+        if (err.stack) {
+          const match = err.stack.match(/script\.js:(\d+)/);
+          if (match) lineTarget = match[1];
+        }
+        errors.push(`Erè liy ${lineTarget} : ${err.message}`);
       }
     } else if (type === 'json') {
       try {
@@ -1249,33 +1063,26 @@ app.post('/code/syntax', requireAuth, (req, res) => {
       let match;
       const selfClosing = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
       while ((match = regex.exec(bodyCode)) !== null) {
-          const tag = match[1].toLowerCase();
-          const isClosing = match[0].startsWith('</');
-          const pos = getLineCol(bodyCode, match.index);
-          if (!isClosing) {
-              if (!selfClosing.has(tag)) stack.push({tag, pos});
+        const tag = match[1].toLowerCase();
+        const isClosing = match[0].startsWith('</');
+        const pos = getLineCol(bodyCode, match.index);
+        if (!isClosing) {
+          if (!selfClosing.has(tag)) stack.push({ tag, pos });
+        } else {
+          if (stack.length === 0) {
+            errors.push(`Ou gen yon tag fèmiti inatandi: </${tag}> nan ${pos}`);
           } else {
-              if (stack.length === 0) {
-                  errors.push(`Tag fèmiti inatandi: </${tag}> nan ${pos}`);
-              } else {
-                  const last = stack.pop();
-                  if (last.tag !== tag) {
-                      errors.push(`Erè tag: nou te atann </${last.tag}> men nou jwenn </${tag}> nan ${pos}`);
-                  }
-              }
+            const last = stack.pop();
+            if (last.tag !== tag) errors.push(`Erè tag: nou te atann </${last.tag}> men nou jwenn </${tag}> nan ${pos}`);
           }
+        }
       }
       if (stack.length > 0) {
-          stack.forEach(unclosed => {
-              errors.push(`Tag pa fèmen: <${unclosed.tag}> louvri nan ${unclosed.pos}`);
-          });
+        stack.forEach(unclosed => { errors.push(`Tag pa fèmen: <${unclosed.tag}> louvri nan ${unclosed.pos}`); });
       }
     }
-    if (errors.length === 0) {
-      res.json({ status: 'Valab' });
-    } else {
-      res.json({ status: 'Nou jwenn erè', errors });
-    }
+    if (errors.length === 0) res.json({ status: 'Valab' });
+    else res.json({ status: 'Nou jwenn erè', errors });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1283,10 +1090,13 @@ app.post('/code/syntax', requireAuth, (req, res) => {
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
   let tmpDir;
+  const taskId = req.query.taskId;
   try {
+    if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const urls = req.body.images || [];
     if (urls.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn imaj' });
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
+    if (taskId) tasks.set(taskId, { step: 'telechargement' });
     for (let i = 0; i < urls.length; i++) {
       const imgRes = await fetch(urls[i]);
       const imgBuf = await imgRes.arrayBuffer();
@@ -1296,46 +1106,53 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       const jpgPath = path.join(tmpDir, `img${padIndex}.jpg`);
       spawnSync('ffmpeg', ['-i', origPath, '-update', '1', '-y', jpgPath]);
     }
+    if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
     const pdfPath = path.join(tmpDir, 'output.pdf');
-    spawnSync('ffmpeg', ['-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath]);
-    const pdfBuffer = fs.readFileSync(pdfPath);
-    const finalUrl = await saveEphemeral(pdfBuffer, 'application/pdf', 'pdf');
-    res.json({ url: finalUrl });
+    const child = spawn('ffmpeg', ['-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath]);
+    
+    child.on('close', async (code) => {
+      if (code !== 0) {
+        if (taskId) tasks.set(taskId, { step: 'erè' });
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
+        return res.status(500).json({ error: "Erè ffmpeg pdf" });
+      }
+      try {
+        const pdfBuffer = fs.readFileSync(pdfPath);
+        if (taskId) tasks.set(taskId, { step: 'sovgade' });
+        const finalUrl = await saveEphemeral(pdfBuffer, 'application/pdf', 'pdf');
+        if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
+        res.json({ url: finalUrl });
+      } catch (e) {
+        res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
+      } finally {
+        if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} }
+      }
+    });
   } catch (error) {
+    if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
-  } finally {
-    if (tmpDir) {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-    }
+    if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} }
   }
 });
 
 app.put('/:filename', requireAuth, async (req, res) => {
+  const taskId = req.query.taskId;
   const filename = path.basename(req.params.filename || '');
-  if (!filename) {
-    return res.status(400).json({ error: 'Ou pa mete non fichye a' });
-  }
-
-  const buffer = await getRawBody(req);
-  if (buffer.length === 0) {
-    return res.status(400).json({ error: 'Ou pa voye okenn fichye' });
-  }
-
+  if (!filename) return res.status(400).json({ error: 'Ou pa mete non fichye a' });
   try {
+    if (taskId) tasks.set(taskId, { step: 'kòmanse' });
+    const buffer = await getRawBody(req, taskId);
+    if (buffer.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn fichye' });
+    if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const randomNum = Math.floor(Math.random() * 10000000).toString();
     const tfid = `TF-${randomNum}`;
     const key = `${tfid}/${filename}`;
-
-    await s3.send(new PutObjectCommand({
-      Bucket: 'tout',
-      Key: key,
-      Body: buffer,
-      ContentType: req.headers['content-type'] || 'application/octet-stream'
-    }));
-
+    await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: key, Body: buffer, ContentType: req.headers['content-type'] || 'application/octet-stream' }));
     const serverUrl = `https://server.tout.adamdh7.org/${key}`;
+    if (taskId) tasks.set(taskId, { step: 'fini', url: serverUrl });
     res.send(serverUrl);
   } catch (error) {
+    if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: error.message });
   }
 });
@@ -1343,41 +1160,24 @@ app.put('/:filename', requireAuth, async (req, res) => {
 app.get('/:tfid/:filename', async (req, res, next) => {
   const tfid = req.params.tfid;
   const filename = req.params.filename;
-
-  if (!tfid.startsWith('TF-') || !/^\d+$/.test(tfid.slice(3))) {
-    return next();
-  }
-
+  if (!tfid.startsWith('TF-') || !/^\d+$/.test(tfid.slice(3))) return next();
   const key = `${tfid}/${filename}`;
   const exists = await resourceExists(key);
-  if (!exists) {
-    return sendUnknown(req, res);
-  }
-
+  if (!exists) return sendUnknown(req, res);
   return servePublicFile(req, res, key);
 });
 
 app.get('/:filename', async (req, res, next) => {
   const filename = req.params.filename;
-
-  if (isReservedPublicName(filename)) {
-    return next();
-  }
-
+  if (isReservedPublicName(filename)) return next();
   const exists = await resourceExists(filename);
-  if (!exists) {
-    return next();
-  }
-
+  if (!exists) return next();
   return servePublicFile(req, res, filename);
 });
 
-app.use((req, res) => {
-  res.status(404).send('Nou pa jwenn sa w ap chèche a');
-});
+app.use((req, res) => { res.status(404).send('Nou pa jwenn sa w ap chèche a'); });
 
 process.on('uncaughtException', (err) => {});
 process.on('unhandledRejection', (reason, promise) => {});
 
-app.listen(PORT, '0.0.0.0', () => {
-});
+app.listen(PORT, '0.0.0.0', () => {});
