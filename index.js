@@ -96,10 +96,13 @@ async function saveEphemeral(buffer, contentType, filenameOrExt) {
     nameToUse = `tfsip-${nameToUse}`;
   }
   const key = `TF-${randomNum}/${nameToUse}`;
+  console.log(`[S3 UPLOAD] Préparation de l'envoi de ${key} (${buffer.length} octets, type: ${contentType})`);
   await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: key, Body: buffer, ContentType: contentType }));
+  console.log(`[S3 UPLOAD SUCCESS] Fichier stocké sur S3 sous la clé: ${key}`);
   setTimeout(async () => {
     try {
       await s3.send(new DeleteObjectCommand({ Bucket: 'tout', Key: key }));
+      console.log(`[S3 AUTO-CLEANUP] Fichier éphémère supprimé: ${key}`);
     } catch (e) {}
   }, 420000);
   return `https://server.tout.adamdh7.org/${key}`;
@@ -905,14 +908,23 @@ app.post('/qrcode', requireAuth, async (req, res) => {
 
 app.post('/compress', requireAuth, async (req, res) => {
   const taskId = req.query.taskId;
+  console.log(`[COMPRESS START] Nouvelle demande de compression. TaskID: ${taskId}`);
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const buffer = await getRawBody(req, taskId);
-    if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
+    console.log(`[COMPRESS RAW] Fichier d'entrée reçu avec succès. Taille du buffer: ${buffer.length} octets`);
+    if (buffer.length === 0) {
+      console.error('[COMPRESS ERROR] Échec : Buffer vide');
+      return res.status(400).json({ error: 'Pa gen done fichye' });
+    }
     const isVideo = req.query.type === 'video';
-    if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
+    if (isVideo && buffer.length > 52428800) {
+      console.error(`[COMPRESS ERROR] Échec : Fichier vidéo trop grand (${buffer.length} octets)`);
+      return res.status(400).json({ error: 'Videyo sa a twò gwo' });
+    }
     
     let origFilename = req.query.filename || req.headers['x-file-name'] || '';
+    console.log(`[COMPRESS FILENAME] Nom d'origine reçu: "${origFilename}"`);
 
     if (origFilename) {
       try {
@@ -928,6 +940,7 @@ app.post('/compress', requireAuth, async (req, res) => {
       const parsed = path.parse(origFilename);
       finalRequestedName = `${parsed.name}.${outFormat}`;
     }
+    console.log(`[COMPRESS TARGET] Nom cible nettoyé: "${finalRequestedName}"`);
     
     if (taskId) tasks.set(taskId, { step: 'telechargement' });
     const sourceExt = isVideo ? 'mp4' : 'png';
@@ -935,100 +948,155 @@ app.post('/compress', requireAuth, async (req, res) => {
     let sourceUploadName = origFilename || sourceExt;
     const sourceUrlRaw = await saveEphemeral(buffer, sourceMime, sourceUploadName);
     const sourceUrl = encodeURI(sourceUrlRaw);
+    console.log(`[COMPRESS URL] Fichier source téléversé pour CloudConvert à l'adresse: ${sourceUrl}`);
     
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
-    const jobPayload = {
+    const jobPayloadWithParams = {
       tasks: {
         "import-1": { operation: "import/url", url: sourceUrl },
-        "task-1": { operation: "convert", input: "import-1", output_format: outFormat },
+        "task-1": { 
+          operation: "convert", 
+          input: "import-1", 
+          output_format: outFormat,
+          video_codec: isVideo ? "x264" : undefined,
+          crf: isVideo ? 35 : undefined,
+          preset: isVideo ? "faster" : undefined,
+          audio_codec: isVideo ? "aac" : undefined,
+          audio_bitrate: isVideo ? "64k" : undefined,
+          quality: !isVideo ? 40 : undefined
+        },
         "export-1": { operation: "export/url", input: "task-1" }
       }
     };
-    
-    if (isVideo) {
-       jobPayload.tasks["task-1"].video_codec = "x264";
-       jobPayload.tasks["task-1"].crf = 35;
-       jobPayload.tasks["task-1"].preset = "faster";
-       jobPayload.tasks["task-1"].audio_codec = "aac";
-       jobPayload.tasks["task-1"].audio_bitrate = "64k";
-    } else {
-       jobPayload.tasks["task-1"].quality = 40;
-    }
+
+    const jobPayloadSimple = {
+      tasks: {
+        "import-1": { operation: "import/url", url: sourceUrl },
+        "task-1": { 
+          operation: "convert", 
+          input: "import-1", 
+          output_format: outFormat
+        },
+        "export-1": { operation: "export/url", input: "task-1" }
+      }
+    };
 
     const validKeys = CLOUDCONVERT_KEYS.filter(k => typeof k === 'string' && k.trim().length > 0);
-    if (validKeys.length === 0) throw new Error("Echek");
+    console.log(`[COMPRESS API KEYS] Clés CloudConvert trouvées pour rotation: ${validKeys.length}`);
+    if (validKeys.length === 0) throw new Error("Aucune clé API CloudConvert valide");
 
     let exportUrl = null;
     let jobSuccess = false;
 
-    for (const key of validKeys) {
-      try {
-        const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${key}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(jobPayload)
-        });
+    for (let keyIdx = 0; keyIdx < validKeys.length; keyIdx++) {
+      const key = validKeys[keyIdx];
+      const obscuredKey = key.substring(0, 15) + '...';
+      console.log(`[COMPRESS ATTEMPT] Tentative avec clé [${keyIdx + 1}/${validKeys.length}]: ${obscuredKey}`);
+      
+      const payloadsToTry = [jobPayloadWithParams, jobPayloadSimple];
+      
+      for (let pIdx = 0; pIdx < payloadsToTry.length; pIdx++) {
+        const payload = payloadsToTry[pIdx];
+        const isFallbackPayload = pIdx === 1;
+        console.log(`[COMPRESS PAYLOAD] Essai de la configuration [${isFallbackPayload ? 'REPLI SIMPLE' : 'PARAMÈTRES COMPLETS'}]`);
         
-        if (!ccRes.ok) continue;
-        
-        const jobData = await ccRes.json();
-        const jobId = jobData.data.id;
-        
-        let finished = false;
-        let jobError = false;
-        let fetchFailedCount = 0;
-
-        while (!finished && !jobError) {
-          await new Promise(r => setTimeout(r, 2000));
-          const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-            headers: { "Authorization": `Bearer ${key}` }
+        try {
+          const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${key}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
           });
-          if (!checkRes.ok) {
-            fetchFailedCount++;
-            if (fetchFailedCount > 3) {
-              jobError = true;
-              break;
-            }
+          
+          if (!ccRes.ok) {
+            const errBody = await ccRes.text();
+            console.warn(`[COMPRESS CC WARN] Erreur d'initialisation du job CC. Statut: ${ccRes.status}, Corps: ${errBody}`);
             continue;
           }
-          fetchFailedCount = 0;
-          const checkData = await checkRes.json();
-          const status = checkData.data.status;
-          if (status === 'finished') {
-            finished = true;
-            const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-            if (exportTask && exportTask.result && exportTask.result.files) {
-              exportUrl = exportTask.result.files[0].url;
-              jobSuccess = true;
-            } else {
+          
+          const jobData = await ccRes.json();
+          const jobId = jobData.data.id;
+          console.log(`[COMPRESS CC JOB] Job CloudConvert créé avec ID: ${jobId}`);
+          
+          let finished = false;
+          let jobError = false;
+          let fetchFailedCount = 0;
+
+          while (!finished && !jobError) {
+            await new Promise(r => setTimeout(r, 2000));
+            const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+              headers: { "Authorization": `Bearer ${key}` }
+            });
+            if (!checkRes.ok) {
+              fetchFailedCount++;
+              console.warn(`[COMPRESS CC STATUS WARN] Erreur de récupération du statut. Code: ${checkRes.status} (Échec ${fetchFailedCount}/3)`);
+              if (fetchFailedCount > 3) {
+                jobError = true;
+                break;
+              }
+              continue;
+            }
+            fetchFailedCount = 0;
+            const checkData = await checkRes.json();
+            const status = checkData.data.status;
+            
+            const taskProgress = checkData.data.tasks || [];
+            taskProgress.forEach(t => {
+              if (t.operation || t.status) {
+                console.log(`[COMPRESS CC STEP LOG] Tâche: ${t.operation || 'convert'}, Statut: ${t.status}, Progrès: ${t.percent || 0}%`);
+              }
+            });
+
+            if (status === 'finished') {
+              finished = true;
+              const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+              if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
+                exportUrl = exportTask.result.files[0].url;
+                jobSuccess = true;
+                console.log(`[COMPRESS CC SUCCESS] Job complété avec succès ! Fichier exporté: ${exportUrl}`);
+              } else {
+                console.error(`[COMPRESS CC ERROR] Tâche réussie mais aucun fichier d'exportation trouvé.`);
+                jobError = true;
+              }
+            } else if (status === 'error') {
+              const failedSubTask = checkData.data.tasks.find(t => t.status === 'failed' || t.status === 'error');
+              const failedMsg = failedSubTask ? failedSubTask.message : 'Détail inconnu';
+              console.error(`[COMPRESS CC FAIL DETECTED] CloudConvert a renvoyé une erreur de traitement: ${failedMsg}`);
               jobError = true;
             }
-          } else if (status === 'error') {
-            jobError = true;
           }
+          if (jobSuccess) break;
+        } catch (e) {
+          console.error(`[COMPRESS INTERNAL EXCEPTION] Exception capturée lors de l'appel CloudConvert:`, e);
+          continue;
         }
-        if (jobSuccess) break;
-      } catch (e) {
-        continue;
       }
+      if (jobSuccess) break;
     }
 
-    if (!jobSuccess || !exportUrl) throw new Error("Echek");
+    if (!jobSuccess || !exportUrl) {
+      console.error('[COMPRESS OVERALL ERROR] Toutes les clés de secours et configurations ont échoué.');
+      throw new Error("Echek jeneral konpresyon");
+    }
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
+    console.log(`[COMPRESS DOWNLOAD] Téléchargement du fichier converti depuis CloudConvert... URL: ${exportUrl}`);
     const dlRes = await fetch(exportUrl);
+    if (!dlRes.ok) throw new Error("Echek telechajman fichier fini");
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
+    console.log(`[COMPRESS DOWNLOAD SUCCESS] Fichier converti téléchargé. Taille: ${dlBuf.length} octets`);
     
     const finalMime = isVideo ? 'video/mp4' : 'image/jpeg';
     const finalUrl = await saveEphemeral(dlBuf, finalMime, finalRequestedName);
+    console.log(`[COMPRESS FINISHED] Compression complètement achevée. Fichier final: ${finalUrl}`);
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
     res.json({ url: finalUrl });
   } catch (e) {
+    console.error('[COMPRESS CATCH EXCEPTION] Erreur fatale compress:', e);
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1135,6 +1203,7 @@ app.post('/resize', requireAuth, async (req, res) => {
 
 app.post('/upload', requireAuth, async (req, res) => {
   const taskId = req.query.taskId;
+  console.log(`[UPLOAD START] Demande d'upload fichier brute reçue. TaskID: ${taskId}`);
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const buffer = await getRawBody(req, taskId);
@@ -1167,8 +1236,10 @@ app.post('/upload', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const url = await saveEphemeral(fileBuffer, 'application/pdf', 'pdf');
     if (taskId) tasks.set(taskId, { step: 'fini', url });
+    console.log(`[UPLOAD SUCCESS] Fichier enregistré via upload sous l'URL: ${url}`);
     res.json({ url });
   } catch (e) {
+    console.error('[UPLOAD ERROR] Échec upload brute:', e);
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Erè pandan telechargement an" });
   }
@@ -1261,6 +1332,7 @@ app.post('/code/syntax', requireAuth, (req, res) => {
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
   const taskId = req.query.taskId;
+  console.log(`[IMAGES-TO-PDF] Nouvelle demande de génération PDF. TaskID: ${taskId}`);
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const urls = req.body.images || [];
@@ -1311,6 +1383,7 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
         
         const jobData = await ccRes.json();
         const jobId = jobData.data.id;
+        console.log(`[IMAGES-TO-PDF CC JOB] Job démarré. ID: ${jobId}`);
         
         let finished = false;
         let jobError = false;
@@ -1349,8 +1422,10 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     const finalUrl = await saveEphemeral(dlBuf, 'application/pdf', 'tfsip-document.pdf');
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
+    console.log(`[IMAGES-TO-PDF SUCCESS] PDF complet généré et disponible à l'adresse: ${finalUrl}`);
     res.json({ url: finalUrl });
   } catch (error) {
+    console.error('[IMAGES-TO-PDF ERROR] Échec lors de la création du document PDF:', error);
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1398,7 +1473,13 @@ app.get('/:filename', async (req, res, next) => {
 
 app.use((req, res) => { res.status(404).send('Nou pa jwenn sa w ap chèche a'); });
 
-process.on('uncaughtException', (err) => {});
-process.on('unhandledRejection', (reason, promise) => {});
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL UNCAUGHT EXCEPTION]', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL UNHANDLED REJECTION] Raison:', reason);
+});
 
-app.listen(PORT, '0.0.0.0', () => {});
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[SERVER START] Tout est démarré sur le port ${PORT}`);
+});
