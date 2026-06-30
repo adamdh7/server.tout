@@ -904,11 +904,20 @@ app.post('/compress', requireAuth, async (req, res) => {
     fs.writeFileSync(tmpIn, buffer);
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
-    const args = isVideo ? ['-nostdin', '-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', '-preset', 'ultrafast', '-threads', '1', '-y', tmpOut] : ['-nostdin', '-i', tmpIn, '-q:v', '5', '-y', tmpOut];
+    const args = isVideo 
+      ? ['-nostdin', '-i', tmpIn, '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-crf', '28', '-preset', 'veryfast', '-threads', '2', '-y', tmpOut] 
+      : ['-nostdin', '-i', tmpIn, '-q:v', '5', '-y', tmpOut];
+      
     const child = spawn('ffmpeg', args, { stdio: 'ignore' });
     
     let responded = false;
+    
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch(e) {}
+    }, 120000);
+
     child.on('error', (err) => {
+      clearTimeout(timer);
       if (responded) return;
       responded = true;
       if (taskId) tasks.set(taskId, { step: 'erè' });
@@ -918,6 +927,7 @@ app.post('/compress', requireAuth, async (req, res) => {
     });
 
     child.on('close', async (code) => {
+      clearTimeout(timer);
       if (responded) return;
       responded = true;
       if (code !== 0) {
@@ -972,7 +982,13 @@ app.post('/resize', requireAuth, async (req, res) => {
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${width}:${height}`, '-y', outImg], { stdio: 'ignore' });
       
       let responded = false;
+      
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch(e) {}
+      }, 60000);
+
       child.on('error', (err) => {
+        clearTimeout(timer);
         if (responded) return;
         responded = true;
         try { fs.unlinkSync(tmpImg); } catch (e) {}
@@ -981,6 +997,7 @@ app.post('/resize', requireAuth, async (req, res) => {
       });
 
       child.on('close', async (code) => {
+        clearTimeout(timer);
         if (responded) return;
         responded = true;
         try {
@@ -1007,7 +1024,12 @@ app.post('/resize', requireAuth, async (req, res) => {
       const outImg = path.join(os.tmpdir(), `out-res-${s}-${Date.now()}.png`);
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${s}:${s}`, '-y', outImg], { stdio: 'ignore' });
       
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch(e) {}
+      }, 60000);
+
       child.on('error', (err) => {
+        clearTimeout(timer);
         completed++;
         if (completed === sizes.length && !responded) {
           responded = true;
@@ -1018,6 +1040,7 @@ app.post('/resize', requireAuth, async (req, res) => {
       });
 
       child.on('close', async (code) => {
+        clearTimeout(timer);
         try {
           if (code === 0) {
             const outBuf = fs.readFileSync(outImg);
@@ -1187,13 +1210,15 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       const scaleResult = spawnSync('ffmpeg', [
         '-nostdin',
         '-i', origPath,
-        '-vf', 'scale=1240:1754:force_original_aspect_ratio=decrease,pad=1240:1754:-1:-1:color=white',
+        '-vf', 'scale=1240:1754:force_original_aspect_ratio=decrease,pad=1240:1754:(ow-iw)/2:(oh-ih)/2:color=white',
         '-q:v', '5',
         '-y',
         jpgPath
       ], { stdio: 'ignore' });
       
-      if (scaleResult.error) throw new Error('Erè ffmpeg pandan redimansyon imaj');
+      if (scaleResult.error || (scaleResult.status !== 0 && scaleResult.status !== null)) {
+          throw new Error('Erè ffmpeg pandan redimansyon imaj');
+      }
     }
     
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
@@ -1211,7 +1236,13 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     ], { stdio: 'ignore' });
     
     let responded = false;
+    
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch(e) {}
+    }, 60000);
+
     child.on('error', (err) => {
+      clearTimeout(timer);
       if (responded) return;
       responded = true;
       if (taskId) tasks.set(taskId, { step: 'erè' });
@@ -1220,6 +1251,7 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     });
 
     child.on('close', async (code) => {
+      clearTimeout(timer);
       if (responded) return;
       responded = true;
       if (code !== 0) {
