@@ -913,6 +913,14 @@ app.post('/compress', requireAuth, async (req, res) => {
     if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
     
     let origFilename = req.query.filename || req.headers['x-file-name'] || '';
+
+    if (origFilename) {
+      try {
+         origFilename = decodeURIComponent(origFilename);
+      } catch(e) {}
+      origFilename = origFilename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    }
+
     let outFormat = isVideo ? 'mp4' : 'jpg';
     let finalRequestedName = outFormat;
     
@@ -925,7 +933,8 @@ app.post('/compress', requireAuth, async (req, res) => {
     const sourceExt = isVideo ? 'mp4' : 'png';
     const sourceMime = isVideo ? 'video/mp4' : 'image/png';
     let sourceUploadName = origFilename || sourceExt;
-    const sourceUrl = await saveEphemeral(buffer, sourceMime, sourceUploadName);
+    const sourceUrlRaw = await saveEphemeral(buffer, sourceMime, sourceUploadName);
+    const sourceUrl = encodeURI(sourceUrlRaw);
     
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
@@ -971,22 +980,33 @@ app.post('/compress', requireAuth, async (req, res) => {
         
         let finished = false;
         let jobError = false;
+        let fetchFailedCount = 0;
+
         while (!finished && !jobError) {
           await new Promise(r => setTimeout(r, 2000));
           const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
             headers: { "Authorization": `Bearer ${key}` }
           });
           if (!checkRes.ok) {
-            jobError = true;
-            break;
+            fetchFailedCount++;
+            if (fetchFailedCount > 3) {
+              jobError = true;
+              break;
+            }
+            continue;
           }
+          fetchFailedCount = 0;
           const checkData = await checkRes.json();
           const status = checkData.data.status;
           if (status === 'finished') {
             finished = true;
             const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-            exportUrl = exportTask.result.files[0].url;
-            jobSuccess = true;
+            if (exportTask && exportTask.result && exportTask.result.files) {
+              exportUrl = exportTask.result.files[0].url;
+              jobSuccess = true;
+            } else {
+              jobError = true;
+            }
           } else if (status === 'error') {
             jobError = true;
           }
