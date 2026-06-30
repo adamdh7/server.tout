@@ -646,7 +646,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     await new Promise(resolve => setTimeout(resolve, 7));
     const context = recentMessages ? recentMessages.reverse().map(m => ({ role: m.role, content: m.content })) : [];
 
-    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
+    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess. Do not use emojis in your responses.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, {
       method: 'POST',
@@ -724,7 +724,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                 attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
               });
             }
-            const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
+            const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request. Do not use emojis in your responses.\n\nResults:\n" + searchResultsText;
             const contextLimit = context.slice(-6);
 
             try {
@@ -1031,6 +1031,8 @@ app.post('/qrcode', requireAuth, async (req, res) => {
 });
 
 app.post('/compress', requireAuth, async (req, res) => {
+  let tmpIn;
+  let tmpOut;
   try {
     const buffer = await getRawBody(req);
     if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
@@ -1039,38 +1041,52 @@ app.post('/compress', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Videyo sa a twò gwo pou konprese l' });
     }
     const ext = isVideo ? 'mp4' : 'png';
-    const tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${ext}`);
-    const tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}.${ext}`);
+    tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${ext}`);
+    tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}.${ext}`);
     fs.writeFileSync(tmpIn, buffer);
     if (isVideo) {
-      spawnSync('ffmpeg', ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', tmpOut]);
+      spawnSync('ffmpeg', ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', '-preset', 'faster', tmpOut]);
     } else {
-      spawnSync('ffmpeg', ['-i', tmpIn, '-q:v', '10', tmpOut]);
+      spawnSync('ffmpeg', ['-i', tmpIn, '-q:v', '10', '-compression_level', '9', tmpOut]);
     }
-    const outBuf = fs.readFileSync(tmpOut);
+
+    const inSize = fs.statSync(tmpIn).size;
+    let outSize = 0;
+    try {
+      outSize = fs.statSync(tmpOut).size;
+    } catch (e) {}
+
+    let finalBuf = buffer;
+    if (outSize > 0 && outSize < inSize) {
+      finalBuf = fs.readFileSync(tmpOut);
+    }
+    
     const cType = isVideo ? 'video/mp4' : 'image/png';
-    const url = await saveEphemeral(outBuf, cType, ext);
-    try { fs.unlinkSync(tmpIn); fs.unlinkSync(tmpOut); } catch (e) {}
+    const url = await saveEphemeral(finalBuf, cType, ext);
     res.json({ url });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
+  } finally {
+    try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
+    try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
   }
 });
 
 app.post('/resize', requireAuth, async (req, res) => {
+  let tmpImg;
   try {
     const buffer = await getRawBody(req);
     if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
     const width = req.query.width;
     const height = req.query.height;
-    const tmpImg = path.join(os.tmpdir(), `in-res-${Date.now()}.png`);
+    tmpImg = path.join(os.tmpdir(), `in-res-${Date.now()}.png`);
     fs.writeFileSync(tmpImg, buffer);
     if (width && height) {
       const outImg = path.join(os.tmpdir(), `out-res-${Date.now()}.png`);
       spawnSync('ffmpeg', ['-i', tmpImg, '-vf', `scale=${width}:${height}`, outImg]);
       const outBuf = fs.readFileSync(outImg);
       const url = await saveEphemeral(outBuf, 'image/png', 'png');
-      try { fs.unlinkSync(tmpImg); fs.unlinkSync(outImg); } catch (e) {}
+      try { fs.unlinkSync(outImg); } catch (e) {}
       return res.json({ url });
     }
     const sizes = [192, 512, 1024, 2024];
@@ -1082,25 +1098,46 @@ app.post('/resize', requireAuth, async (req, res) => {
       urls.push(await saveEphemeral(outBuf, 'image/png', 'png'));
       try { fs.unlinkSync(outImg); } catch (e) {}
     }
-    try { fs.unlinkSync(tmpImg); } catch (e) {}
     res.json({ urls });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
+  } finally {
+    try { if (tmpImg) fs.unlinkSync(tmpImg); } catch (e) {}
   }
 });
 
 app.post('/code/search', requireAuth, (req, res) => {
   try {
     const bodyCode = req.body.code || '';
-    const query = req.body.query || '';
+    const query = (req.body.query || '').toLowerCase();
     const lines = bodyCode.split('\n');
     const results = [];
+    const qWords = query.split(/\s+/).filter(Boolean);
+
     lines.forEach((line, index) => {
-      if (line.includes(query)) {
-        results.push(`Liy ${index + 1}: ${line.trim()}`);
+      const t = line.toLowerCase();
+      let score = 0;
+      if (t.includes(query)) {
+        score += 1000;
+      }
+      let wordMatches = 0;
+      qWords.forEach(w => {
+        if (t.includes(w)) wordMatches++;
+      });
+      score += (wordMatches * 50);
+      let charMatches = 0;
+      for (let i = 0; i < query.length; i++) {
+        if (t.includes(query[i])) charMatches++;
+      }
+      score += charMatches;
+
+      if (score > (query.length * 0.3) && line.trim().length > 0) {
+        results.push({ text: `${index + 1} : ${line.trim()}`, score });
       }
     });
-    res.json({ results });
+
+    results.sort((a, b) => b.score - a.score);
+    res.json({ results: results.map(r => r.text) });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1124,10 +1161,30 @@ app.post('/code/syntax', requireAuth, (req, res) => {
         errors.push(err.message);
       }
     } else if (type === 'html') {
-      const openTags = (bodyCode.match(/<[a-zA-Z]+/g) || []).length;
-      const closeTags = (bodyCode.match(/<\/[a-zA-Z]+/g) || []).length;
-      if (openTags !== closeTags) {
-        errors.push(`Petèt yon tag pa fèmen. Ouvèti: ${openTags}, Fèmiti: ${closeTags}`);
+      const stack = [];
+      const regex = /<\/?([a-zA-Z0-9]+)[^>]*>/g;
+      let match;
+      const selfClosing = new Set(['img','br','hr','input','meta','link']);
+      while ((match = regex.exec(bodyCode)) !== null) {
+          const tag = match[1].toLowerCase();
+          const isClosing = match[0].startsWith('</');
+          if (!isClosing) {
+              if (!selfClosing.has(tag)) stack.push({tag, index: match.index});
+          } else {
+              if (stack.length === 0) {
+                  errors.push(`Tag fèmiti inatandi: </${tag}> nan pozisyon ${match.index}`);
+              } else {
+                  const last = stack.pop();
+                  if (last.tag !== tag) {
+                      errors.push(`Erè tag: nou te atann </${last.tag}> men nou jwenn </${tag}> nan pozisyon ${match.index}`);
+                  }
+              }
+          }
+      }
+      if (stack.length > 0) {
+          stack.forEach(unclosed => {
+              errors.push(`Tag pa fèmen: <${unclosed.tag}> louvri nan pozisyon ${unclosed.index}`);
+          });
       }
     }
     if (errors.length === 0) {
@@ -1141,29 +1198,29 @@ app.post('/code/syntax', requireAuth, (req, res) => {
 });
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
+  let tmpDir;
   try {
     const urls = req.body.images || [];
     if (urls.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn imaj' });
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
-    const inputFiles = [];
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
     for (let i = 0; i < urls.length; i++) {
       const imgRes = await fetch(urls[i]);
       const imgBuf = await imgRes.arrayBuffer();
-      const imgPath = path.join(tmpDir, `img${i}.jpg`);
+      const padIndex = String(i + 1).padStart(3, '0');
+      const imgPath = path.join(tmpDir, `img${padIndex}.jpg`);
       fs.writeFileSync(imgPath, Buffer.from(imgBuf));
-      inputFiles.push(imgPath);
     }
     const pdfPath = path.join(tmpDir, 'output.pdf');
-    const ffmpegArgs = [];
-    inputFiles.forEach(f => { ffmpegArgs.push('-i'); ffmpegArgs.push(f); });
-    ffmpegArgs.push(pdfPath);
-    spawnSync('ffmpeg', ffmpegArgs);
+    spawnSync('ffmpeg', ['-f', 'image2', '-i', path.join(tmpDir, 'img%03d.jpg'), pdfPath]);
     const pdfBuffer = fs.readFileSync(pdfPath);
     const finalUrl = await saveEphemeral(pdfBuffer, 'application/pdf', 'pdf');
-    fs.rmSync(tmpDir, { recursive: true, force: true });
     res.json({ url: finalUrl });
   } catch (error) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
+  } finally {
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
+    }
   }
 });
 
@@ -1232,6 +1289,9 @@ app.get('/:filename', async (req, res, next) => {
 app.use((req, res) => {
   res.status(404).send('Nou pa jwenn sa w ap chèche a');
 });
+
+process.on('uncaughtException', (err) => {});
+process.on('unhandledRejection', (reason, promise) => {});
 
 app.listen(PORT, '0.0.0.0', () => {
 });
