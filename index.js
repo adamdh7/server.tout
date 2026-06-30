@@ -76,9 +76,15 @@ async function cleanupEphemeralFiles() {
 }
 cleanupEphemeralFiles();
 
-async function saveEphemeral(buffer, contentType, ext) {
+async function saveEphemeral(buffer, contentType, filenameOrExt) {
   const randomNum = Math.floor(Math.random() * 10000000).toString();
-  const key = `TF-${randomNum}/tfsip-${Date.now()}.${ext}`;
+  let nameToUse = filenameOrExt;
+  if (!nameToUse.includes('.')) {
+    nameToUse = `tfsip-${Date.now()}.${filenameOrExt}`;
+  } else if (!nameToUse.startsWith('tfsip-')) {
+    nameToUse = `tfsip-${nameToUse}`;
+  }
+  const key = `TF-${randomNum}/${nameToUse}`;
   await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: key, Body: buffer, ContentType: contentType }));
   setTimeout(async () => {
     try {
@@ -895,13 +901,22 @@ app.post('/compress', requireAuth, async (req, res) => {
     const isVideo = req.query.type === 'video';
     if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
     
+    let origFilename = req.query.filename || req.headers['x-file-name'] || '';
+    let outFormat = isVideo ? 'mp4' : 'jpg';
+    let finalRequestedName = outFormat;
+    
+    if (origFilename) {
+      const parsed = path.parse(origFilename);
+      finalRequestedName = `${parsed.name}.${outFormat}`;
+    }
+    
     if (taskId) tasks.set(taskId, { step: 'telechargement' });
     const sourceExt = isVideo ? 'mp4' : 'png';
     const sourceMime = isVideo ? 'video/mp4' : 'image/png';
-    const sourceUrl = await saveEphemeral(buffer, sourceMime, sourceExt);
+    let sourceUploadName = origFilename || sourceExt;
+    const sourceUrl = await saveEphemeral(buffer, sourceMime, sourceUploadName);
     
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
-    const outFormat = isVideo ? 'mp4' : 'jpg';
     
     const jobPayload = {
       tasks: {
@@ -913,9 +928,12 @@ app.post('/compress', requireAuth, async (req, res) => {
     
     if (isVideo) {
        jobPayload.tasks["task-1"].video_codec = "x264";
-       jobPayload.tasks["task-1"].crf = 28;
+       jobPayload.tasks["task-1"].crf = 35;
+       jobPayload.tasks["task-1"].preset = "faster";
+       jobPayload.tasks["task-1"].audio_codec = "aac";
+       jobPayload.tasks["task-1"].audio_bitrate = "64k";
     } else {
-       jobPayload.tasks["task-1"].quality = 50;
+       jobPayload.tasks["task-1"].quality = 40;
     }
     
     const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
@@ -954,7 +972,7 @@ app.post('/compress', requireAuth, async (req, res) => {
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
     const finalMime = isVideo ? 'video/mp4' : 'image/jpeg';
-    const finalUrl = await saveEphemeral(dlBuf, finalMime, outFormat);
+    const finalUrl = await saveEphemeral(dlBuf, finalMime, finalRequestedName);
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
     res.json({ url: finalUrl });
@@ -1199,23 +1217,25 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
     
     const tasksPayload = {};
-    const importNames = [];
+    const mergeInputs = [];
     
     urls.forEach((url, i) => {
-      const name = `import-${i}`;
-      tasksPayload[name] = { operation: "import/url", url: url };
-      importNames.push(name);
+      const importName = `import-${i}`;
+      const convertName = `convert-${i}`;
+      tasksPayload[importName] = { operation: "import/url", url: url };
+      tasksPayload[convertName] = { operation: "convert", input: importName, output_format: "pdf" };
+      mergeInputs.push(convertName);
     });
     
-    tasksPayload["task-1"] = {
-      operation: "convert",
-      input: importNames,
+    tasksPayload["merge-1"] = {
+      operation: "merge",
+      input: mergeInputs,
       output_format: "pdf"
     };
     
     tasksPayload["export-1"] = {
       operation: "export/url",
-      input: "task-1"
+      input: "merge-1"
     };
     
     const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
@@ -1253,7 +1273,7 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     const dlRes = await fetch(exportUrl);
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
-    const finalUrl = await saveEphemeral(dlBuf, 'application/pdf', 'pdf');
+    const finalUrl = await saveEphemeral(dlBuf, 'application/pdf', 'tfsip-document.pdf');
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
     res.json({ url: finalUrl });
