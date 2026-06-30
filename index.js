@@ -574,6 +574,95 @@ app.post('/ai', requireAuth, async (req, res) => {
     let isBuffering = false;
     let buffer = '';
 
+    function sendToClient(str) {
+      if (!str) return;
+      res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
+      frontendMessage += str;
+      dbMessage += str;
+    }
+
+    async function handleTag(tag) {
+      const tImgMatch = tag.match(/^\[IMAGE:\s*(.*)\]$/i);
+      const tSrcMatch = tag.match(/^\[SEARCH:\s*(.*)\]$/i);
+      const tRefMatch = tag.match(/^\[IMAGES?:\s*(SEARCH_)?(\d+)\]$/i);
+
+      if (tImgMatch) {
+        const prompt = tImgMatch[1].trim();
+        imageIndex++;
+        await new Promise(resolve => setTimeout(resolve, 7));
+        const keepAliveImg = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
+        const imgUrl = await processAndUploadImage(prompt);
+        clearInterval(keepAliveImg);
+        const dbTag = `[IMAGES: ${imageIndex}]`;
+        if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
+        sendToClient(imgUrl ? `\n\n${imgUrl}\n\n` : '');
+      } else if (tSrcMatch) {
+        const query = tSrcMatch[1].trim();
+        await new Promise(resolve => setTimeout(resolve, 7));
+        const keepAliveSrc = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
+        const searchRes = await performSearch(query);
+        clearInterval(keepAliveSrc);
+        let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
+        if (searchRes.images && searchRes.images.length > 0) {
+          allImages = allImages.concat(searchRes.images);
+          searchResultsText += 'Images URLs:\n' + searchRes.images.join('\n') + '\n\n';
+          searchRes.images.forEach(imgUrl => {
+            searchImageIndex++;
+            const dbTag = `[IMAGES: SEARCH_${searchImageIndex}]`;
+            attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
+          });
+        }
+        const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
+        const contextLimit = context.slice(-6);
+
+        try {
+          const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true })
+          });
+          if (!aiFinalRaw.ok) {
+            sendToClient("Sistèm sa a pa disponib kounye a.");
+            return;
+          }
+          const aiFinalStream = aiFinalRaw.body;
+          if (aiFinalStream && aiFinalStream.getReader) {
+            const readerFinal = aiFinalStream.getReader();
+            const decoderFinal = new TextDecoder();
+            let bufferFinal = '';
+            while (true) {
+              const { done, value } = await readerFinal.read();
+              if (done) break;
+              bufferFinal += decoderFinal.decode(value, { stream: true });
+              const linesFinal = bufferFinal.split('\n');
+              bufferFinal = linesFinal.pop();
+              for (const lineFinal of linesFinal) {
+                const cleanLineFinal = lineFinal.trim();
+                if (cleanLineFinal.startsWith('data: ') && cleanLineFinal !== 'data: [DONE]') {
+                  try {
+                    const dataFinal = JSON.parse(cleanLineFinal.slice(6));
+                    if (dataFinal.response) {
+                      for (const c of dataFinal.response) await processChar(c);
+                    }
+                  } catch (e) {}
+                }
+              }
+              await new Promise(resolve => setTimeout(resolve, 7));
+            }
+          }
+        } catch (e) {}
+      } else if (tRefMatch) {
+        const idx = parseInt(tRefMatch[2], 10) - 1;
+        if (allImages && allImages[idx]) {
+          sendToClient(`\n\n${allImages[idx]}\n\n`);
+        } else {
+          sendToClient(tag);
+        }
+      } else {
+        sendToClient(tag);
+      }
+    }
+
     async function processChar(char) {
       if (!char) return;
       if (!isBuffering) {
@@ -581,103 +670,18 @@ app.post('/ai', requireAuth, async (req, res) => {
           isBuffering = true;
           buffer = '[';
         } else {
-          res.write(JSON.stringify({ type: 'final', content: char }) + '\n');
-          frontendMessage += char;
-          dbMessage += char;
+          sendToClient(char);
         }
       } else {
         buffer += char;
-        const tImg = '[IMAGE:';
-        const tSrc = '[SEARCH:';
         if (char === ']') {
           isBuffering = false;
-          if (buffer.startsWith(tImg)) {
-            const prompt = buffer.substring(7, buffer.length - 1).trim();
-            imageIndex++;
-            await new Promise(resolve => setTimeout(resolve, 7));
-            const keepAliveImg = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
-            const imgUrl = await processAndUploadImage(prompt);
-            clearInterval(keepAliveImg);
-            const dbTag = `[IMAGES: ${imageIndex}]`;
-            if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
-            const replacement = imgUrl ? `\n\n${imgUrl}\n\n` : '';
-            res.write(JSON.stringify({ type: 'final', content: replacement }) + '\n');
-            frontendMessage += replacement;
-            dbMessage += dbTag;
-          } else if (buffer.startsWith(tSrc)) {
-            const query = buffer.substring(8, buffer.length - 1).trim();
-            await new Promise(resolve => setTimeout(resolve, 7));
-            const keepAliveSrc = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
-            const searchRes = await performSearch(query);
-            clearInterval(keepAliveSrc);
-            let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
-            if (searchRes.images && searchRes.images.length > 0) {
-              allImages = allImages.concat(searchRes.images);
-              searchResultsText += 'Images URLs:\n' + searchRes.images.join('\n') + '\n\n';
-              searchRes.images.forEach(imgUrl => {
-                searchImageIndex++;
-                const dbTag = `[IMAGES: SEARCH_${searchImageIndex}]`;
-                attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
-              });
-            }
-            const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
-            const contextLimit = context.slice(-6);
-
-            try {
-              const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true })
-              });
-              if (!aiFinalRaw.ok) {
-                const errMsg = "Sistèm sa a pa disponib kounye a.";
-                for (const char of errMsg) await processChar(char);
-                return;
-              }
-              const aiFinalStream = aiFinalRaw.body;
-              if (aiFinalStream && aiFinalStream.getReader) {
-                const readerFinal = aiFinalStream.getReader();
-                const decoderFinal = new TextDecoder();
-                let bufferFinal = '';
-                while (true) {
-                  const { done, value } = await readerFinal.read();
-                  if (done) break;
-                  bufferFinal += decoderFinal.decode(value, { stream: true });
-                  const linesFinal = bufferFinal.split('\n');
-                  bufferFinal = linesFinal.pop();
-                  for (const lineFinal of linesFinal) {
-                    const cleanLineFinal = lineFinal.trim();
-                    if (cleanLineFinal.startsWith('data: ') && cleanLineFinal !== 'data: [DONE]') {
-                      try {
-                        const dataFinal = JSON.parse(cleanLineFinal.slice(6));
-                        if (dataFinal.response) {
-                          for (const c of dataFinal.response) await processChar(c);
-                        }
-                      } catch (e) {}
-                    }
-                  }
-                  await new Promise(resolve => setTimeout(resolve, 7));
-                }
-              }
-            } catch (e) {}
-          } else {
-            res.write(JSON.stringify({ type: 'final', content: buffer }) + '\n');
-            frontendMessage += buffer;
-            dbMessage += buffer;
-          }
+          await handleTag(buffer);
           buffer = '';
-        } else {
-          const pImg = tImg.startsWith(buffer);
-          const pSrc = tSrc.startsWith(buffer);
-          const iImg = buffer.startsWith(tImg);
-          const iSrc = buffer.startsWith(tSrc);
-          if (!pImg && !pSrc && !iImg && !iSrc) {
-            isBuffering = false;
-            res.write(JSON.stringify({ type: 'final', content: buffer }) + '\n');
-            frontendMessage += buffer;
-            dbMessage += buffer;
-            buffer = '';
-          }
+        } else if (!/^\[(IMAGE|SEARCH|IMAGES)/i.test(buffer) && buffer.length > 8) {
+          isBuffering = false;
+          sendToClient(buffer);
+          buffer = '';
         }
       }
     }
@@ -722,19 +726,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
 
     if (isBuffering) {
-      res.write(JSON.stringify({ type: 'final', content: buffer }) + '\n');
-      frontendMessage += buffer;
-      dbMessage += buffer;
-    }
-
-    if (allImages.length > 0) {
-      allImages.forEach((imgUrl, idx) => {
-        const dbTag = `[IMAGES: SEARCH_${idx + 1}]`;
-        if (dbMessage.includes(imgUrl)) {
-          dbMessage = dbMessage.split(imgUrl).join(dbTag);
-          if (!attachmentsToSave.some(a => a.url === imgUrl)) attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
-        }
-      });
+      sendToClient(buffer);
     }
 
     try {
@@ -883,7 +875,7 @@ app.post('/compress', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
     const args = isVideo ? ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '32', '-preset', 'faster', tmpOut] : ['-i', tmpIn, '-q:v', '5', '-y', tmpOut];
-    const child = spawn('ffmpeg', args);
+    const child = spawn('ffmpeg', args, { stdio: 'ignore' });
     
     child.on('close', async (code) => {
       if (code !== 0) {
@@ -934,7 +926,7 @@ app.post('/resize', requireAuth, async (req, res) => {
 
     if (width && height) {
       const outImg = path.join(os.tmpdir(), `out-res-${Date.now()}.png`);
-      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${width}:${height}`, outImg]);
+      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${width}:${height}`, outImg], { stdio: 'ignore' });
       child.on('close', async (code) => {
         try {
           if (code !== 0) throw new Error('Echek');
@@ -957,7 +949,7 @@ app.post('/resize', requireAuth, async (req, res) => {
     let completed = 0;
     for (const s of sizes) {
       const outImg = path.join(os.tmpdir(), `out-res-${s}-${Date.now()}.png`);
-      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${s}:${s}`, outImg]);
+      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${s}:${s}`, outImg], { stdio: 'ignore' });
       child.on('close', async (code) => {
         try {
           if (code === 0) {
@@ -987,10 +979,18 @@ app.post('/upload', requireAuth, async (req, res) => {
     let fileBuffer = buffer;
     const ct = req.headers['content-type'] || '';
     if (ct.includes('multipart/form-data')) {
-      const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'));
-      const footerStart = buffer.lastIndexOf(Buffer.from('\r\n--'));
-      if (headerEnd !== -1 && footerStart !== -1) {
-        fileBuffer = buffer.subarray(headerEnd + 4, footerStart);
+      const match = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+      if (match) {
+        const boundary = match[1] || match[2];
+        const boundaryBuf = Buffer.from('--' + boundary);
+        const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'));
+        if (headerEnd !== -1) {
+          const startPos = headerEnd + 4;
+          const footerStart = buffer.indexOf(boundaryBuf, startPos);
+          if (footerStart !== -1) {
+            fileBuffer = buffer.subarray(startPos, footerStart - 2);
+          }
+        }
       }
     }
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
@@ -1104,11 +1104,11 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       const origPath = path.join(tmpDir, `orig${padIndex}.file`);
       fs.writeFileSync(origPath, Buffer.from(imgBuf));
       const jpgPath = path.join(tmpDir, `img${padIndex}.jpg`);
-      spawnSync('ffmpeg', ['-i', origPath, '-update', '1', '-y', jpgPath]);
+      spawnSync('ffmpeg', ['-i', origPath, '-update', '1', '-y', jpgPath], { stdio: 'ignore' });
     }
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
     const pdfPath = path.join(tmpDir, 'output.pdf');
-    const child = spawn('ffmpeg', ['-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath]);
+    const child = spawn('ffmpeg', ['-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath], { stdio: 'ignore' });
     
     child.on('close', async (code) => {
       if (code !== 0) {
