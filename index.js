@@ -364,7 +364,7 @@ function transcodeVideoStreamToMp4(inputStream, res) {
   res.status(200);
   res.setHeader('Content-Type', 'video/mp4');
   res.setHeader('Accept-Ranges', 'none');
-  const ffmpeg = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const ffmpeg = spawn('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
   const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) {} };
   reqLikeCleanup(inputStream, ffmpeg, res, abort);
   inputStream.pipe(ffmpeg.stdin);
@@ -557,6 +557,15 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
     const context = validContext.reverse().map(m => ({ role: m.role, content: m.content }));
 
+    const contextAttMap = new Map();
+    if (validContext.length > 0) {
+      const msgIds = validContext.map(m => m.id);
+      const contextAtts = await attachmentsCollection.find({ message_id: { $in: msgIds } }).toArray();
+      contextAtts.forEach(a => {
+        if (a.placeholder) contextAttMap.set(a.placeholder.trim().toUpperCase(), a.url);
+      });
+    }
+
     const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, {
@@ -652,9 +661,16 @@ app.post('/ai', requireAuth, async (req, res) => {
           }
         } catch (e) {}
       } else if (tRefMatch) {
-        const idx = parseInt(tRefMatch[2], 10) - 1;
-        if (allImages && allImages[idx]) {
-          sendToClient(`\n\n${allImages[idx]}\n\n`);
+        const rawTag = tag.trim().toUpperCase();
+        let foundUrl = contextAttMap.get(rawTag);
+        if (!foundUrl && tRefMatch[1]) {
+          const idx = parseInt(tRefMatch[2], 10) - 1;
+          if (allImages && allImages[idx]) foundUrl = `\n\n${allImages[idx]}\n\n`;
+        }
+        if (foundUrl) {
+          let cleanUrl = foundUrl;
+          if (!cleanUrl.startsWith('\n')) cleanUrl = `\n\n${cleanUrl}\n\n`;
+          sendToClient(cleanUrl);
         } else {
           sendToClient(tag);
         }
@@ -678,10 +694,16 @@ app.post('/ai', requireAuth, async (req, res) => {
           isBuffering = false;
           await handleTag(buffer);
           buffer = '';
-        } else if (!/^\[(IMAGE|SEARCH|IMAGES)/i.test(buffer) && buffer.length > 8) {
-          isBuffering = false;
-          sendToClient(buffer);
-          buffer = '';
+        } else {
+          const uBuf = buffer.toUpperCase();
+          const isMatch = "[IMAGE:".startsWith(uBuf) || uBuf.startsWith("[IMAGE:") ||
+                          "[SEARCH:".startsWith(uBuf) || uBuf.startsWith("[SEARCH:") ||
+                          "[IMAGES:".startsWith(uBuf) || uBuf.startsWith("[IMAGES:");
+          if (!isMatch) {
+            isBuffering = false;
+            sendToClient(buffer);
+            buffer = '';
+          }
         }
       }
     }
@@ -874,7 +896,7 @@ app.post('/compress', requireAuth, async (req, res) => {
     fs.writeFileSync(tmpIn, buffer);
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
-    const args = isVideo ? ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '32', '-preset', 'faster', tmpOut] : ['-i', tmpIn, '-q:v', '5', '-y', tmpOut];
+    const args = isVideo ? ['-nostdin', '-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', '-preset', 'ultrafast', '-threads', '1', '-y', tmpOut] : ['-nostdin', '-i', tmpIn, '-q:v', '5', '-y', tmpOut];
     const child = spawn('ffmpeg', args, { stdio: 'ignore' });
     
     child.on('close', async (code) => {
@@ -926,7 +948,7 @@ app.post('/resize', requireAuth, async (req, res) => {
 
     if (width && height) {
       const outImg = path.join(os.tmpdir(), `out-res-${Date.now()}.png`);
-      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${width}:${height}`, outImg], { stdio: 'ignore' });
+      const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${width}:${height}`, '-y', outImg], { stdio: 'ignore' });
       child.on('close', async (code) => {
         try {
           if (code !== 0) throw new Error('Echek');
@@ -949,7 +971,7 @@ app.post('/resize', requireAuth, async (req, res) => {
     let completed = 0;
     for (const s of sizes) {
       const outImg = path.join(os.tmpdir(), `out-res-${s}-${Date.now()}.png`);
-      const child = spawn('ffmpeg', ['-i', tmpImg, '-vf', `scale=${s}:${s}`, outImg], { stdio: 'ignore' });
+      const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${s}:${s}`, '-y', outImg], { stdio: 'ignore' });
       child.on('close', async (code) => {
         try {
           if (code === 0) {
@@ -982,13 +1004,22 @@ app.post('/upload', requireAuth, async (req, res) => {
       const match = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
       if (match) {
         const boundary = match[1] || match[2];
-        const boundaryBuf = Buffer.from('--' + boundary);
-        const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'));
-        if (headerEnd !== -1) {
-          const startPos = headerEnd + 4;
-          const footerStart = buffer.indexOf(boundaryBuf, startPos);
-          if (footerStart !== -1) {
-            fileBuffer = buffer.subarray(startPos, footerStart - 2);
+        const startStr = '--' + boundary;
+        const endStr = '\r\n--' + boundary;
+        const startBuf = Buffer.from(startStr);
+        const endBuf = Buffer.from(endStr);
+        const headEndBuf = Buffer.from('\r\n\r\n');
+        const startIdx = buffer.indexOf(startBuf);
+        if (startIdx !== -1) {
+          const headEndIdx = buffer.indexOf(headEndBuf, startIdx);
+          if (headEndIdx !== -1) {
+            const contentStart = headEndIdx + 4;
+            const contentEnd = buffer.indexOf(endBuf, contentStart);
+            if (contentEnd !== -1) {
+              fileBuffer = buffer.subarray(contentStart, contentEnd);
+            } else {
+              fileBuffer = buffer.subarray(contentStart);
+            }
           }
         }
       }
@@ -1104,11 +1135,11 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       const origPath = path.join(tmpDir, `orig${padIndex}.file`);
       fs.writeFileSync(origPath, Buffer.from(imgBuf));
       const jpgPath = path.join(tmpDir, `img${padIndex}.jpg`);
-      spawnSync('ffmpeg', ['-i', origPath, '-update', '1', '-y', jpgPath], { stdio: 'ignore' });
+      spawnSync('ffmpeg', ['-nostdin', '-i', origPath, '-update', '1', '-y', jpgPath], { stdio: 'ignore' });
     }
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
     const pdfPath = path.join(tmpDir, 'output.pdf');
-    const child = spawn('ffmpeg', ['-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath], { stdio: 'ignore' });
+    const child = spawn('ffmpeg', ['-nostdin', '-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath], { stdio: 'ignore' });
     
     child.on('close', async (code) => {
       if (code !== 0) {
