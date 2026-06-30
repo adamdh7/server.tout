@@ -371,11 +371,18 @@ function transcodeVideoStreamToMp4(inputStream, res) {
   ffmpeg.stdout.pipe(res);
   let stderr = '';
   ffmpeg.stderr.on('data', chunk => { stderr += chunk.toString(); });
+  let responded = false;
+  ffmpeg.on('error', () => {
+    if (responded) return;
+    responded = true;
+    if (!res.headersSent) res.status(500).type('text/plain').send('Erè ffmpeg');
+  });
   ffmpeg.on('close', code => {
+    if (responded) return;
+    responded = true;
     if (code !== 0 && !res.headersSent) res.status(415).type('text/plain').send(stderr || 'Pa ka konvèti videyo sa a');
     else if (code !== 0 && !res.writableEnded) res.end();
   });
-  ffmpeg.on('error', () => { if (!res.headersSent) res.status(500).type('text/plain').send('Erè ffmpeg'); });
 }
 
 async function serveS3VideoTranscode(req, res, key) {
@@ -879,6 +886,7 @@ app.post('/qrcode', requireAuth, async (req, res) => {
 });
 
 app.post('/compress', requireAuth, async (req, res) => {
+  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib sou sèvè a' });
   let tmpIn;
   let tmpOut;
   const taskId = req.query.taskId;
@@ -899,7 +907,19 @@ app.post('/compress', requireAuth, async (req, res) => {
     const args = isVideo ? ['-nostdin', '-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', '-preset', 'ultrafast', '-threads', '1', '-y', tmpOut] : ['-nostdin', '-i', tmpIn, '-q:v', '5', '-y', tmpOut];
     const child = spawn('ffmpeg', args, { stdio: 'ignore' });
     
+    let responded = false;
+    child.on('error', (err) => {
+      if (responded) return;
+      responded = true;
+      if (taskId) tasks.set(taskId, { step: 'erè' });
+      try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
+      try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
+      res.status(500).json({ error: 'Echek pandan konpresyon an' });
+    });
+
     child.on('close', async (code) => {
+      if (responded) return;
+      responded = true;
       if (code !== 0) {
         if (taskId) tasks.set(taskId, { step: 'erè' });
         try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
@@ -934,6 +954,7 @@ app.post('/compress', requireAuth, async (req, res) => {
 });
 
 app.post('/resize', requireAuth, async (req, res) => {
+  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib sou sèvè a' });
   let tmpImg;
   const taskId = req.query.taskId;
   try {
@@ -949,7 +970,19 @@ app.post('/resize', requireAuth, async (req, res) => {
     if (width && height) {
       const outImg = path.join(os.tmpdir(), `out-res-${Date.now()}.png`);
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${width}:${height}`, '-y', outImg], { stdio: 'ignore' });
+      
+      let responded = false;
+      child.on('error', (err) => {
+        if (responded) return;
+        responded = true;
+        try { fs.unlinkSync(tmpImg); } catch (e) {}
+        try { fs.unlinkSync(outImg); } catch (e) {}
+        res.status(500).json({ error: "Erè redimansyon" });
+      });
+
       child.on('close', async (code) => {
+        if (responded) return;
+        responded = true;
         try {
           if (code !== 0) throw new Error('Echek');
           const outBuf = fs.readFileSync(outImg);
@@ -969,9 +1002,21 @@ app.post('/resize', requireAuth, async (req, res) => {
     const sizes = [192, 512, 1024, 2024];
     const urls = [];
     let completed = 0;
+    let responded = false;
     for (const s of sizes) {
       const outImg = path.join(os.tmpdir(), `out-res-${s}-${Date.now()}.png`);
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${s}:${s}`, '-y', outImg], { stdio: 'ignore' });
+      
+      child.on('error', (err) => {
+        completed++;
+        if (completed === sizes.length && !responded) {
+          responded = true;
+          try { fs.unlinkSync(tmpImg); } catch (e) {}
+          if (taskId) tasks.set(taskId, { step: 'fini', urls });
+          res.json({ urls });
+        }
+      });
+
       child.on('close', async (code) => {
         try {
           if (code === 0) {
@@ -981,7 +1026,8 @@ app.post('/resize', requireAuth, async (req, res) => {
         } catch (e) {}
         try { fs.unlinkSync(outImg); } catch (e) {}
         completed++;
-        if (completed === sizes.length) {
+        if (completed === sizes.length && !responded) {
+          responded = true;
           try { fs.unlinkSync(tmpImg); } catch (e) {}
           if (taskId) tasks.set(taskId, { step: 'fini', urls });
           res.json({ urls });
@@ -1120,6 +1166,7 @@ app.post('/code/syntax', requireAuth, (req, res) => {
 });
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
+  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib sou sèvè a' });
   let tmpDir;
   const taskId = req.query.taskId;
   try {
@@ -1130,22 +1177,55 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'telechargement' });
     for (let i = 0; i < urls.length; i++) {
       const imgRes = await fetch(urls[i]);
+      if (!imgRes.ok) throw new Error('Enposib pou telechaje imaj la');
       const imgBuf = await imgRes.arrayBuffer();
       const padIndex = String(i + 1).padStart(3, '0');
       const origPath = path.join(tmpDir, `orig${padIndex}.file`);
       fs.writeFileSync(origPath, Buffer.from(imgBuf));
       const jpgPath = path.join(tmpDir, `img${padIndex}.jpg`);
-      spawnSync('ffmpeg', ['-nostdin', '-i', origPath, '-update', '1', '-y', jpgPath], { stdio: 'ignore' });
+      
+      const scaleResult = spawnSync('ffmpeg', [
+        '-nostdin',
+        '-i', origPath,
+        '-vf', 'scale=1240:1754:force_original_aspect_ratio=decrease,pad=1240:1754:-1:-1:color=white',
+        '-q:v', '5',
+        '-y',
+        jpgPath
+      ], { stdio: 'ignore' });
+      
+      if (scaleResult.error) throw new Error('Erè ffmpeg pandan redimansyon imaj');
     }
+    
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
     const pdfPath = path.join(tmpDir, 'output.pdf');
-    const child = spawn('ffmpeg', ['-nostdin', '-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath], { stdio: 'ignore' });
+    const child = spawn('ffmpeg', [
+      '-nostdin',
+      '-f', 'image2',
+      '-pattern_type', 'sequence',
+      '-framerate', '1',
+      '-i', path.join(tmpDir, 'img%03d.jpg'),
+      '-c:v', 'mjpeg',
+      '-f', 'pdf',
+      '-y',
+      pdfPath
+    ], { stdio: 'ignore' });
     
+    let responded = false;
+    child.on('error', (err) => {
+      if (responded) return;
+      responded = true;
+      if (taskId) tasks.set(taskId, { step: 'erè' });
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
+      res.status(500).json({ error: "Erè ffmpeg pdf" });
+    });
+
     child.on('close', async (code) => {
+      if (responded) return;
+      responded = true;
       if (code !== 0) {
         if (taskId) tasks.set(taskId, { step: 'erè' });
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-        return res.status(500).json({ error: "Erè ffmpeg pdf" });
+        return res.status(500).json({ error: "Erè ffmpeg pdf kòd: " + code });
       }
       try {
         const pdfBuffer = fs.readFileSync(pdfPath);
@@ -1161,8 +1241,8 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     });
   } catch (error) {
     if (taskId) tasks.set(taskId, { step: 'erè' });
-    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
     if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} }
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
