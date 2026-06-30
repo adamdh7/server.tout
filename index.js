@@ -14,6 +14,7 @@ app.set('trust proxy', true);
 const PORT = process.env.PORT || 3000;
 const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
+const CLOUDCONVERT_KEY = process.env.CLOUDCONVERT_API_KEY || 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYWU2YTc1NWE4OWEwODg3MTVkODhhNTZmMDM4OGE1OGNiZTY0OWJiZjZmYTViYzg3ZDkzNThkNTMwZWM3YjZmY2Q0Zjg4OTI2OWVmNDNmYWEiLCJpYXQiOjE3ODI4NDgxNDYuMTgwNzU3LCJuYmYiOjE3ODI4NDgxNDYuMTgwNzU4LCJleHAiOjQ5Mzg1MjE3NDYuMTc0OTgzLCJzdWIiOiI3NjE1ODM1NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsInByZXNldC53cml0ZSIsInByZXNldC5yZWFkIiwid2ViaG9vay53cml0ZSJdfQ.IWtqehZZt8E1mkxUii3g0CKwwHyYqcrL4rKmYbGmB6oNpjEIlKhiNjfqDKcdAjebBsinY2sqf7rMnAJ4DS9osBBYpRTZSvMbPSVvE0wWL5K9zzCthrSchhODv7yRMOhmZkwoPqqcg3X8zhLtPR7em2zrhSUWJYfMy7T8GwXDPWjhZ7UsU4dsFZttbxbVXp2HbUUqmKtHpW1QvlXsh9iwAUSuYZWRKKRfzMU5_m80lerl1OGWY-rxttDCBROAzpp93RflkPdgy_EW0msCEkC0Agkvl6Y9iFLge1VCYevjvuz6Tg_M1EU-4WieJJUA8SlVefxOE_6enbpY3KFV32tucUCvE3MIusBtSsyafdgcxtPCM06pOhmK53Ne4K-7EDA9eBHQAVIcprMoabiQH2gct_dZOb58pDtoItPKrNTFBzs1lWZpPZfMN7oVzlfeTnZnO-srbmLQg7tNRdDjx2an4VO_BQtuZbiysO8E99YBx2GlDsCulkt2yS6vjUhkW9SQQPS7i-X3b9QmpcmOXsaz71g9yON6WWEElqIyu9Zu0rGnJM1VBy6oYr-L_ZXlhKDLf_0SpCuyjq9IZ_k-ONL0jCYOWEi9MQVEnEW-wR7FmHtivNcf7vTWYnksjYSSue939W7nKboo_mwYVyRfINmibxLb6Ha1y9BHu9vsS-AR4jM';
 const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org']);
 
 const s3 = new S3Client({
@@ -886,9 +887,6 @@ app.post('/qrcode', requireAuth, async (req, res) => {
 });
 
 app.post('/compress', requireAuth, async (req, res) => {
-  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib sou sèvè a' });
-  let tmpIn;
-  let tmpOut;
   const taskId = req.query.taskId;
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
@@ -897,68 +895,71 @@ app.post('/compress', requireAuth, async (req, res) => {
     const isVideo = req.query.type === 'video';
     if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
     
-    const extIn = isVideo ? 'mp4' : 'png';
-    const extOut = isVideo ? 'mp4' : 'jpg';
-    tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${extIn}`);
-    tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}.${extOut}`);
-    fs.writeFileSync(tmpIn, buffer);
+    if (taskId) tasks.set(taskId, { step: 'telechargement' });
+    const sourceExt = isVideo ? 'mp4' : 'png';
+    const sourceMime = isVideo ? 'video/mp4' : 'image/png';
+    const sourceUrl = await saveEphemeral(buffer, sourceMime, sourceExt);
+    
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
+    const outFormat = isVideo ? 'mp4' : 'jpg';
     
-    const args = isVideo 
-      ? ['-nostdin', '-i', tmpIn, '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-crf', '28', '-preset', 'veryfast', '-threads', '2', '-y', tmpOut] 
-      : ['-nostdin', '-i', tmpIn, '-q:v', '5', '-y', tmpOut];
-      
-    const child = spawn('ffmpeg', args, { stdio: 'ignore' });
-    
-    let responded = false;
-    
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch(e) {}
-    }, 120000);
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      if (responded) return;
-      responded = true;
-      if (taskId) tasks.set(taskId, { step: 'erè' });
-      try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
-      try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
-      res.status(500).json({ error: 'Echek pandan konpresyon an' });
-    });
-
-    child.on('close', async (code) => {
-      clearTimeout(timer);
-      if (responded) return;
-      responded = true;
-      if (code !== 0) {
-        if (taskId) tasks.set(taskId, { step: 'erè' });
-        try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
-        try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
-        return res.status(500).json({ error: 'Echek pandan konpresyon an' });
+    const jobPayload = {
+      tasks: {
+        "import-1": { operation: "import/url", url: sourceUrl },
+        "task-1": { operation: "convert", input: "import-1", output_format: outFormat },
+        "export-1": { operation: "export/url", input: "task-1" }
       }
-      try {
-        const inSize = fs.statSync(tmpIn).size;
-        let outSize = fs.statSync(tmpOut).size;
-        let finalBuf = buffer;
-        let finalExt = extIn;
-        let finalType = isVideo ? 'video/mp4' : 'image/png';
-        if (outSize > 0 && outSize < inSize) {
-          finalBuf = fs.readFileSync(tmpOut);
-          finalExt = extOut;
-          finalType = isVideo ? 'video/mp4' : 'image/jpeg';
-        }
-        if (taskId) tasks.set(taskId, { step: 'sovgade' });
-        const url = await saveEphemeral(finalBuf, finalType, finalExt);
-        if (taskId) tasks.set(taskId, { step: 'fini', url });
-        res.json({ url });
-      } catch (e) {
-        res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
-      } finally {
-        try { if (tmpIn) fs.unlinkSync(tmpIn); } catch (e) {}
-        try { if (tmpOut) fs.unlinkSync(tmpOut); } catch (e) {}
-      }
+    };
+    
+    if (isVideo) {
+       jobPayload.tasks["task-1"].video_codec = "x264";
+       jobPayload.tasks["task-1"].crf = 28;
+    } else {
+       jobPayload.tasks["task-1"].quality = 50;
+    }
+    
+    const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${CLOUDCONVERT_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(jobPayload)
     });
+    
+    if (!ccRes.ok) throw new Error("Erè");
+    const jobData = await ccRes.json();
+    const jobId = jobData.data.id;
+    
+    let finished = false;
+    let exportUrl = null;
+    while (!finished) {
+      await new Promise(r => setTimeout(r, 2000));
+      const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+        headers: { "Authorization": `Bearer ${CLOUDCONVERT_KEY}` }
+      });
+      const checkData = await checkRes.json();
+      const status = checkData.data.status;
+      if (status === 'finished') {
+        finished = true;
+        const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+        exportUrl = exportTask.result.files[0].url;
+      } else if (status === 'error') {
+        throw new Error("Echek");
+      }
+    }
+    
+    if (taskId) tasks.set(taskId, { step: 'sovgade' });
+    const dlRes = await fetch(exportUrl);
+    const dlBuf = Buffer.from(await dlRes.arrayBuffer());
+    
+    const finalMime = isVideo ? 'video/mp4' : 'image/jpeg';
+    const finalUrl = await saveEphemeral(dlBuf, finalMime, outFormat);
+    
+    if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
+    res.json({ url: finalUrl });
   } catch (e) {
+    if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
@@ -1189,91 +1190,75 @@ app.post('/code/syntax', requireAuth, (req, res) => {
 });
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
-  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib sou sèvè a' });
-  let tmpDir;
   const taskId = req.query.taskId;
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const urls = req.body.images || [];
     if (urls.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn imaj' });
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
-    if (taskId) tasks.set(taskId, { step: 'telechargement' });
-    for (let i = 0; i < urls.length; i++) {
-      const imgRes = await fetch(urls[i]);
-      if (!imgRes.ok) throw new Error('Enposib pou telechaje imaj la');
-      const imgBuf = await imgRes.arrayBuffer();
-      const padIndex = String(i + 1).padStart(3, '0');
-      const origPath = path.join(tmpDir, `orig${padIndex}.file`);
-      fs.writeFileSync(origPath, Buffer.from(imgBuf));
-      const jpgPath = path.join(tmpDir, `img${padIndex}.jpg`);
-      
-      const scaleResult = spawnSync('ffmpeg', [
-        '-nostdin',
-        '-i', origPath,
-        '-vf', 'scale=1240:1754:force_original_aspect_ratio=decrease,pad=1240:1754:(ow-iw)/2:(oh-ih)/2:color=white',
-        '-q:v', '5',
-        '-y',
-        jpgPath
-      ], { stdio: 'ignore' });
-      
-      if (scaleResult.error || (scaleResult.status !== 0 && scaleResult.status !== null)) {
-          throw new Error('Erè ffmpeg pandan redimansyon imaj');
+    
+    if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
+    
+    const tasksPayload = {};
+    const importNames = [];
+    
+    urls.forEach((url, i) => {
+      const name = `import-${i}`;
+      tasksPayload[name] = { operation: "import/url", url: url };
+      importNames.push(name);
+    });
+    
+    tasksPayload["task-1"] = {
+      operation: "convert",
+      input: importNames,
+      output_format: "pdf"
+    };
+    
+    tasksPayload["export-1"] = {
+      operation: "export/url",
+      input: "task-1"
+    };
+    
+    const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${CLOUDCONVERT_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ tasks: tasksPayload })
+    });
+    
+    if (!ccRes.ok) throw new Error("Erè");
+    const jobData = await ccRes.json();
+    const jobId = jobData.data.id;
+    
+    let finished = false;
+    let exportUrl = null;
+    while (!finished) {
+      await new Promise(r => setTimeout(r, 2000));
+      const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+        headers: { "Authorization": `Bearer ${CLOUDCONVERT_KEY}` }
+      });
+      const checkData = await checkRes.json();
+      const status = checkData.data.status;
+      if (status === 'finished') {
+        finished = true;
+        const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+        exportUrl = exportTask.result.files[0].url;
+      } else if (status === 'error') {
+        throw new Error("Echek");
       }
     }
     
-    if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
-    const pdfPath = path.join(tmpDir, 'output.pdf');
-    const child = spawn('ffmpeg', [
-      '-nostdin',
-      '-f', 'image2',
-      '-pattern_type', 'sequence',
-      '-framerate', '1',
-      '-i', path.join(tmpDir, 'img%03d.jpg'),
-      '-c:v', 'mjpeg',
-      '-f', 'pdf',
-      '-y',
-      pdfPath
-    ], { stdio: 'ignore' });
+    if (taskId) tasks.set(taskId, { step: 'sovgade' });
+    const dlRes = await fetch(exportUrl);
+    const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
-    let responded = false;
+    const finalUrl = await saveEphemeral(dlBuf, 'application/pdf', 'pdf');
     
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch(e) {}
-    }, 60000);
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      if (responded) return;
-      responded = true;
-      if (taskId) tasks.set(taskId, { step: 'erè' });
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-      res.status(500).json({ error: "Erè ffmpeg pdf" });
-    });
-
-    child.on('close', async (code) => {
-      clearTimeout(timer);
-      if (responded) return;
-      responded = true;
-      if (code !== 0) {
-        if (taskId) tasks.set(taskId, { step: 'erè' });
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-        return res.status(500).json({ error: "Erè ffmpeg pdf kòd: " + code });
-      }
-      try {
-        const pdfBuffer = fs.readFileSync(pdfPath);
-        if (taskId) tasks.set(taskId, { step: 'sovgade' });
-        const finalUrl = await saveEphemeral(pdfBuffer, 'application/pdf', 'pdf');
-        if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
-        res.json({ url: finalUrl });
-      } catch (e) {
-        res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
-      } finally {
-        if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} }
-      }
-    });
+    if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
+    res.json({ url: finalUrl });
   } catch (error) {
     if (taskId) tasks.set(taskId, { step: 'erè' });
-    if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} }
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
