@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const vm = require('vm');
 
 const app = express();
 app.set('trust proxy', true);
@@ -210,6 +211,9 @@ img, video { max-width: 100%; max-height: 100%; object-fit: contain; outline: no
 <body>
 <div class="wrap">
 ${mediaBlock}
+</div>
+<div style="position:absolute; bottom:30px; z-index:9999; display:flex; justify-content:center; width:100%;">
+<a href="${mediaUrl}&raw=1" download="${filename}" style="background:rgba(255,255,255,0.2); padding:12px 20px; border-radius:12px; color:#fff; text-decoration:none; font-family:sans-serif; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border: 1px solid rgba(255,255,255,0.3); font-size:16px;">Telechaje / Enregistrer</a>
 </div>
 <script>
 function forceDownload() {
@@ -462,6 +466,10 @@ async function servePublicFile(req, res, requestPath) {
   const wantsRaw = req.query.raw === '1';
   const wantsTranscode = req.query.transcode === '1';
 
+  if (wantsRaw) {
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  }
+
   if (browserView && !wantsRaw && !wantsTranscode) {
     const exists = await resourceExists(key);
     if (!exists) {
@@ -646,7 +654,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     await new Promise(resolve => setTimeout(resolve, 7));
     const context = recentMessages ? recentMessages.reverse().map(m => ({ role: m.role, content: m.content })) : [];
 
-    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess. Do not use emojis in your responses.";
+    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, {
       method: 'POST',
@@ -674,6 +682,8 @@ app.post('/ai', requireAuth, async (req, res) => {
     let buffer = '';
 
     async function processChar(char) {
+      char = char.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}\u{1F900}-\u{1FAFF}\u2B50\u2B55\u231A\u231B\u23E9-\u23EC\u23F0\u23F3\u25FD\u25FE\u2614\u2615\u2648-\u2653\u267F\u2693\u26A1\u26AA\u26AB\u26BD\u26BE\u26C4\u26C5\u26CE\u26D4\u26EA\u26F2\u26F3\u26F5\u26FA\u26FD\u2705\u270A-\u270D\u2728\u274C\u274E\u2753-\u2755\u2757\u2795-\u2797\u27B0\u27BF\u2B1B\u2B1C]/gu, '');
+      if (!char) return;
       if (!isBuffering) {
         if (char === '[') {
           isBuffering = true;
@@ -724,7 +734,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                 attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
               });
             }
-            const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request. Do not use emojis in your responses.\n\nResults:\n" + searchResultsText;
+            const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
             const contextLimit = context.slice(-6);
 
             try {
@@ -1003,7 +1013,8 @@ app.post('/calcul', requireAuth, async (req, res) => {
           try {
             const data = JSON.parse(cleanLine.slice(6));
             if (data.response) {
-              res.write(data.response);
+              let cleanChunk = data.response.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}\u{1F900}-\u{1FAFF}\u2B50\u2B55\u231A\u231B\u23E9-\u23EC\u23F0\u23F3\u25FD\u25FE\u2614\u2615\u2648-\u2653\u267F\u2693\u26A1\u26AA\u26AB\u26BD\u26BE\u26C4\u26C5\u26CE\u26D4\u26EA\u26F2\u26F3\u26F5\u26FA\u26FD\u2705\u270A-\u270D\u2728\u274C\u274E\u2753-\u2755\u2757\u2795-\u2797\u27B0\u27BF\u2B1B\u2B1C]/gu, '');
+              if (cleanChunk) res.write(cleanChunk);
             }
           } catch (e) {}
         }
@@ -1040,14 +1051,15 @@ app.post('/compress', requireAuth, async (req, res) => {
     if (isVideo && buffer.length > 52428800) {
       return res.status(400).json({ error: 'Videyo sa a twò gwo pou konprese l' });
     }
-    const ext = isVideo ? 'mp4' : 'png';
-    tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${ext}`);
-    tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}.${ext}`);
+    const extIn = isVideo ? 'mp4' : 'png';
+    const extOut = isVideo ? 'mp4' : 'jpg';
+    tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${extIn}`);
+    tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}.${extOut}`);
     fs.writeFileSync(tmpIn, buffer);
     if (isVideo) {
-      spawnSync('ffmpeg', ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', '-preset', 'faster', tmpOut]);
+      spawnSync('ffmpeg', ['-i', tmpIn, '-vcodec', 'libx264', '-crf', '32', '-preset', 'faster', tmpOut]);
     } else {
-      spawnSync('ffmpeg', ['-i', tmpIn, '-q:v', '10', '-compression_level', '9', tmpOut]);
+      spawnSync('ffmpeg', ['-i', tmpIn, '-q:v', '5', '-y', tmpOut]);
     }
 
     const inSize = fs.statSync(tmpIn).size;
@@ -1057,12 +1069,16 @@ app.post('/compress', requireAuth, async (req, res) => {
     } catch (e) {}
 
     let finalBuf = buffer;
+    let finalExt = extIn;
+    let finalType = isVideo ? 'video/mp4' : 'image/png';
+
     if (outSize > 0 && outSize < inSize) {
       finalBuf = fs.readFileSync(tmpOut);
+      finalExt = extOut;
+      finalType = isVideo ? 'video/mp4' : 'image/jpeg';
     }
     
-    const cType = isVideo ? 'video/mp4' : 'image/png';
-    const url = await saveEphemeral(finalBuf, cType, ext);
+    const url = await saveEphemeral(finalBuf, finalType, finalExt);
     res.json({ url });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
@@ -1148,9 +1164,16 @@ app.post('/code/syntax', requireAuth, (req, res) => {
     const bodyCode = req.body.code || '';
     const type = req.body.type || 'js';
     let errors = [];
+
+    const getLineCol = (str, index) => {
+      const upTo = str.slice(0, index);
+      const linesCount = upTo.split('\n');
+      return `liy ${linesCount.length}`;
+    };
+
     if (type === 'js') {
       try {
-        new Function(bodyCode);
+        new vm.Script(bodyCode);
       } catch (err) {
         errors.push(err.message);
       }
@@ -1164,26 +1187,27 @@ app.post('/code/syntax', requireAuth, (req, res) => {
       const stack = [];
       const regex = /<\/?([a-zA-Z0-9]+)[^>]*>/g;
       let match;
-      const selfClosing = new Set(['img','br','hr','input','meta','link']);
+      const selfClosing = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
       while ((match = regex.exec(bodyCode)) !== null) {
           const tag = match[1].toLowerCase();
           const isClosing = match[0].startsWith('</');
+          const pos = getLineCol(bodyCode, match.index);
           if (!isClosing) {
-              if (!selfClosing.has(tag)) stack.push({tag, index: match.index});
+              if (!selfClosing.has(tag)) stack.push({tag, pos});
           } else {
               if (stack.length === 0) {
-                  errors.push(`Tag fèmiti inatandi: </${tag}> nan pozisyon ${match.index}`);
+                  errors.push(`Tag fèmiti inatandi: </${tag}> nan ${pos}`);
               } else {
                   const last = stack.pop();
                   if (last.tag !== tag) {
-                      errors.push(`Erè tag: nou te atann </${last.tag}> men nou jwenn </${tag}> nan pozisyon ${match.index}`);
+                      errors.push(`Erè tag: nou te atann </${last.tag}> men nou jwenn </${tag}> nan ${pos}`);
                   }
               }
           }
       }
       if (stack.length > 0) {
           stack.forEach(unclosed => {
-              errors.push(`Tag pa fèmen: <${unclosed.tag}> louvri nan pozisyon ${unclosed.index}`);
+              errors.push(`Tag pa fèmen: <${unclosed.tag}> louvri nan ${unclosed.pos}`);
           });
       }
     }
@@ -1207,11 +1231,13 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       const imgRes = await fetch(urls[i]);
       const imgBuf = await imgRes.arrayBuffer();
       const padIndex = String(i + 1).padStart(3, '0');
-      const imgPath = path.join(tmpDir, `img${padIndex}.jpg`);
-      fs.writeFileSync(imgPath, Buffer.from(imgBuf));
+      const origPath = path.join(tmpDir, `orig${padIndex}.file`);
+      fs.writeFileSync(origPath, Buffer.from(imgBuf));
+      const jpgPath = path.join(tmpDir, `img${padIndex}.jpg`);
+      spawnSync('ffmpeg', ['-i', origPath, '-update', '1', '-y', jpgPath]);
     }
     const pdfPath = path.join(tmpDir, 'output.pdf');
-    spawnSync('ffmpeg', ['-f', 'image2', '-i', path.join(tmpDir, 'img%03d.jpg'), pdfPath]);
+    spawnSync('ffmpeg', ['-f', 'image2', '-pattern_type', 'sequence', '-i', path.join(tmpDir, 'img%03d.jpg'), '-y', pdfPath]);
     const pdfBuffer = fs.readFileSync(pdfPath);
     const finalUrl = await saveEphemeral(pdfBuffer, 'application/pdf', 'pdf');
     res.json({ url: finalUrl });
