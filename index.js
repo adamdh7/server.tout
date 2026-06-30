@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { MongoClient } = require('mongodb');
@@ -16,14 +17,14 @@ const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.
 
 const s3 = new S3Client({
   region: 'auto',
-  endpoint: 'https://49bdcdc6f29c08eda8bb7bcb8db9e27f.r2.cloudflarestorage.com',
+  endpoint: process.env.S3_ENDPOINT,
   credentials: {
-    accessKeyId: '0b4381f979d1a203e25454e46ca21451',
-    secretAccessKey: 'f91be74d39cdc8861e9c450cc0c0443c103f60d33ad6e6ed6602d9c41294f2bf'
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY
   }
 });
 
-const mongoClient = new MongoClient('mongodb+srv://adamdh7:Tchengy1@adamdh7.hlvtcf9.mongodb.net/?appName=adamdh7');
+const mongoClient = new MongoClient(process.env.MONGO_URI);
 let db;
 
 async function getDb() {
@@ -38,7 +39,7 @@ const FFMPEG_AVAILABLE = (() => {
   try {
     const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
     return !result.error && result.status === 0;
-  } catch {
+  } catch (e) {
     return false;
   }
 })();
@@ -81,7 +82,7 @@ async function saveEphemeral(buffer, contentType, ext) {
 function safeDecode(value) {
   try {
     return decodeURIComponent(value);
-  } catch {
+  } catch (e) {
     return value;
   }
 }
@@ -191,7 +192,7 @@ function buildViewerHtml(title, mediaUrl, filename) {
   }
 
   return `<!doctype html>
-<html lang="fr">
+<html lang="ht">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -225,9 +226,9 @@ if (mediaEl) {
 
 function sendUnknown(req, res) {
   if (req.headers.accept && req.headers.accept.includes('text/html')) {
-    res.status(404).send('<!doctype html><html lang="fr"><head><meta charset="UTF-8"><title>Inconnu</title></head><body style="background:#000;color:#fff;text-align:center;padding:50px;font-family:sans-serif;"><h1>Inconnu</h1><script>setTimeout(function(){ window.close(); window.history.back(); }, 1500);</script></body></html>');
+    res.status(404).send('<!doctype html><html lang="ht"><head><meta charset="UTF-8"><title>Enkoni</title></head><body style="background:#000;color:#fff;text-align:center;padding:50px;font-family:sans-serif;"><h1>Enkoni</h1><script>setTimeout(function(){ window.close(); window.history.back(); }, 1500);</script></body></html>');
   } else {
-    res.status(404).send('Inconnu');
+    res.status(404).send('Enkoni');
   }
 }
 
@@ -235,7 +236,7 @@ function getUrlHost(value) {
   if (!value) return '';
   try {
     return new URL(value).hostname.toLowerCase();
-  } catch {
+  } catch (e) {
     return '';
   }
 }
@@ -275,10 +276,10 @@ function canAccessPrivate(req) {
   }
 
   if (browserLike) {
-    return { allowed: false, reason: 'Forbidden: browser origin not allowed' };
+    return { allowed: false, reason: 'Entèdi: orijin navigatè a pa otorize' };
   }
 
-  return { allowed: false, reason: 'Forbidden: token required' };
+  return { allowed: false, reason: 'Entèdi: ou dwe mete yon token' };
 }
 
 function requireAuth(req, res, next) {
@@ -325,7 +326,7 @@ async function resourceExists(requestPath) {
   try {
     await s3.send(new HeadObjectCommand({ Bucket: 'tout', Key: key }));
     return true;
-  } catch {
+  } catch (e) {
     return false;
   }
 }
@@ -361,7 +362,7 @@ async function serveS3RawFile(req, res, key, filename) {
     }
 
     s3Response.Body.pipe(res);
-  } catch {
+  } catch (e) {
     sendUnknown(req, res);
   }
 }
@@ -371,10 +372,10 @@ function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
     abort();
     try {
       if (inputStream.destroy) inputStream.destroy();
-    } catch {}
+    } catch (e) {}
     try {
       if (ffmpeg.stdin) ffmpeg.stdin.destroy();
-    } catch {}
+    } catch (e) {}
   };
 
   res.on('close', stop);
@@ -387,7 +388,7 @@ function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
 
 function transcodeVideoStreamToMp4(inputStream, res) {
   if (!FFMPEG_AVAILABLE) {
-    res.status(415).type('text/plain').send('ffmpeg manquant sur le serveur');
+    res.status(415).type('text/plain').send('Pa gen ffmpeg sou sèvè a');
     return;
   }
 
@@ -409,7 +410,7 @@ function transcodeVideoStreamToMp4(inputStream, res) {
   const abort = () => {
     try {
       ffmpeg.kill('SIGKILL');
-    } catch {}
+    } catch (e) {}
   };
 
   reqLikeCleanup(inputStream, ffmpeg, res, abort);
@@ -423,7 +424,7 @@ function transcodeVideoStreamToMp4(inputStream, res) {
 
   ffmpeg.on('close', code => {
     if (code !== 0 && !res.headersSent) {
-      res.status(415).type('text/plain').send(stderr || 'Impossible de convertir cette vidéo');
+      res.status(415).type('text/plain').send(stderr || 'Pa ka konvèti videyo sa a');
     } else if (code !== 0 && !res.writableEnded) {
       res.end();
     }
@@ -431,7 +432,7 @@ function transcodeVideoStreamToMp4(inputStream, res) {
 
   ffmpeg.on('error', () => {
     if (!res.headersSent) {
-      res.status(500).type('text/plain').send('Erreur ffmpeg');
+      res.status(500).type('text/plain').send('Erè ffmpeg');
     }
   });
 }
@@ -448,7 +449,7 @@ async function serveS3VideoTranscode(req, res, key) {
     }
 
     transcodeVideoStreamToMp4(s3Response.Body, res);
-  } catch {
+  } catch (e) {
     sendUnknown(req, res);
   }
 }
@@ -488,10 +489,10 @@ async function servePublicFile(req, res, requestPath) {
 async function processAndUploadImage(prompt) {
   try {
     await new Promise(resolve => setTimeout(resolve, 7));
-    const aiRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/black-forest-labs/flux-1-schnell', {
+    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer cfut_l8s5VxbFfnOVUvCoRkO5y0ufnTGwbAeq3RCiC7tic83923a8',
+        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ prompt: prompt, num_steps: 4 })
@@ -512,7 +513,7 @@ async function processAndUploadImage(prompt) {
     }));
     await new Promise(resolve => setTimeout(resolve, 7));
     return `https://server.tout.adamdh7.org/${filename}`;
-  } catch {
+  } catch (e) {
     return '';
   }
 }
@@ -520,11 +521,10 @@ async function processAndUploadImage(prompt) {
 async function performSearch(query) {
   try {
     await new Promise(resolve => setTimeout(resolve, 7));
-    const TAVILY_KEY = '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';
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true })
+      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true })
     });
     await new Promise(resolve => setTimeout(resolve, 7));
     const data = await res.json();
@@ -535,17 +535,17 @@ async function performSearch(query) {
       foundImages = data.images;
     }
     if (!data.results) {
-      return { context: 'No results found.', images: [], links: [] };
+      return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
     }
     for (const r of data.results) {
-      text += 'URL: ' + (r.url || 'Lien indisponible') + '\nContenu: ' + r.content + '\n\n';
+      text += 'URL: ' + (r.url || 'Lyen pa disponib') + '\nContenu: ' + r.content + '\n\n';
       if (r.url) {
         foundLinks.push(r.url);
       }
     }
     return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
-  } catch {
-    return { context: 'Error during the search process.', images: [], links: [] };
+  } catch (e) {
+    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [] };
   }
 }
 
@@ -568,9 +568,9 @@ app.get('/Tout.png', async (req, res) => {
       object.Body.pipe(res);
       return;
     }
-    res.status(404).send('Image not found');
-  } catch {
-    res.status(404).send('Image not found');
+    res.status(404).send('Nou pa jwenn imaj la');
+  } catch (e) {
+    res.status(404).send('Nou pa jwenn imaj la');
   }
 });
 
@@ -603,7 +603,7 @@ app.get('/ai', requireAuth, async (req, res) => {
     }
     res.json({ messages: Array.from(messagesMap.values()) });
   } catch (err) {
-    res.status(500).json({ error: 'Database Error', details: err.message });
+    res.status(500).json({ error: 'Erè baz done', details: err.message });
   }
 });
 
@@ -623,7 +623,7 @@ app.post('/ai', requireAuth, async (req, res) => {
   const userMessage = body.message?.trim();
   const sess = body.session_id || 'global';
   if (!userMessage) {
-    res.status(400).json({ error: 'Empty message provided' });
+    res.status(400).json({ error: 'Ou bay yon mesaj vid' });
     return;
   }
 
@@ -648,10 +648,10 @@ app.post('/ai', requireAuth, async (req, res) => {
 
     const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
 
-    const aiRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer cfut_l8s5VxbFfnOVUvCoRkO5y0ufnTGwbAeq3RCiC7tic83923a8',
+        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -694,7 +694,7 @@ app.post('/ai', requireAuth, async (req, res) => {
             imageIndex++;
             await new Promise(resolve => setTimeout(resolve, 7));
             const keepAliveImg = setInterval(() => {
-              try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch {}
+              try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {}
             }, 1000);
             const imgUrl = await processAndUploadImage(prompt);
             clearInterval(keepAliveImg);
@@ -710,7 +710,7 @@ app.post('/ai', requireAuth, async (req, res) => {
             const query = buffer.substring(8, buffer.length - 1).trim();
             await new Promise(resolve => setTimeout(resolve, 7));
             const keepAliveSrc = setInterval(() => {
-              try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch {}
+              try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {}
             }, 1000);
             const searchRes = await performSearch(query);
             clearInterval(keepAliveSrc);
@@ -728,10 +728,10 @@ app.post('/ai', requireAuth, async (req, res) => {
             const contextLimit = context.slice(-6);
 
             try {
-              const aiFinalRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.1-8b-instruct', {
+              const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
                 method: 'POST',
                 headers: {
-                  'Authorization': 'Bearer cfut_l8s5VxbFfnOVUvCoRkO5y0ufnTGwbAeq3RCiC7tic83923a8',
+                  'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
                   'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -744,7 +744,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                 })
               });
               if (!aiFinalRaw.ok) {
-                const errMsg = "Que ce système n'est pas disponible actuellement.";
+                const errMsg = "Sistèm sa a pa disponib kounye a.";
                 for (const char of errMsg) await processChar(char);
                 return;
               }
@@ -769,13 +769,13 @@ app.post('/ai', requireAuth, async (req, res) => {
                             await processChar(c);
                           }
                         }
-                      } catch {}
+                      } catch (e) {}
                     }
                   }
                   await new Promise(resolve => setTimeout(resolve, 7));
                 }
               }
-            } catch {}
+            } catch (e) {}
           } else {
             res.write(JSON.stringify({ type: 'final', content: buffer }) + '\n');
             frontendMessage += buffer;
@@ -799,7 +799,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
 
     if (!aiRaw.ok) {
-      const errMsg = "Que ce système n'est pas disponible actuellement.";
+      const errMsg = "Sistèm sa a pa disponib kounye a.";
       for (const char of errMsg) await processChar(char);
     } else {
       const aiResponseStream = aiRaw.body;
@@ -824,17 +824,17 @@ app.post('/ai', requireAuth, async (req, res) => {
                       await processChar(char);
                     }
                   }
-                } catch {}
+                } catch (e) {}
               }
             }
             await new Promise(resolve => setTimeout(resolve, 7));
           }
-        } catch {
-          const errMsg = 'Stream error occurred.';
+        } catch (e) {
+          const errMsg = "Gen yon erè ki fèt nan kouran an (stream).";
           for (const char of errMsg) await processChar(char);
         }
       } else {
-        const errMsg = 'Sorry, I could not generate a response.';
+        const errMsg = "Mwen regrèt, mwen pa ka bay yon repons.";
         for (const char of errMsg) await processChar(char);
       }
     }
@@ -878,10 +878,10 @@ app.post('/ai', requireAuth, async (req, res) => {
           await new Promise(resolve => setTimeout(resolve, 7));
         }
       }
-    } catch {}
+    } catch (e) {}
 
     res.end();
-  } catch {
+  } catch (e) {
     res.end();
   }
 });
@@ -890,29 +890,29 @@ app.post('/jerere', requireAuth, async (req, res) => {
   let body;
   try {
     body = req.body;
-  } catch {
-    return res.status(400).json({ error: 'Invalid JSON' });
+  } catch (e) {
+    return res.status(400).json({ error: 'Fòma JSON pa valab' });
   }
   const prompt = body.prompt?.trim();
-  if (!prompt) return res.status(400).json({ error: 'No prompt provided' });
+  if (!prompt) return res.status(400).json({ error: 'Ou pa bay okenn enstriksyon (prompt)' });
 
   try {
-    const aiRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/black-forest-labs/flux-1-schnell', {
+    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer cfut_l8s5VxbFfnOVUvCoRkO5y0ufnTGwbAeq3RCiC7tic83923a8',
+        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ prompt: prompt, num_steps: 4 })
     });
     if (!aiRaw.ok) {
-      return res.status(503).json({ error: "Que ce système n'est pas disponible actuellement." });
+      return res.status(503).json({ error: "Sistèm sa a pa disponib kounye a." });
     }
     const aiResponse = await aiRaw.json();
     await new Promise(resolve => setTimeout(resolve, 7));
 
     if (!aiResponse || !aiResponse.result || !aiResponse.result.image) {
-      throw new Error('The AI did not return a valid image.');
+      throw new Error("Entèlijans atifisyèl la pa bay yon imaj ki valab.");
     }
     const binaryString = atob(aiResponse.result.image);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
@@ -931,7 +931,7 @@ app.post('/jerere', requireAuth, async (req, res) => {
     const returnedUrl = `https://server.tout.adamdh7.org/${filename}`;
     res.json({ url: returnedUrl });
   } catch (error) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
@@ -953,21 +953,21 @@ app.post('/calcul', requireAuth, async (req, res) => {
   let body;
   try {
     body = req.body;
-  } catch {
-    return res.status(400).json({ error: 'Invalid JSON format' });
+  } catch (e) {
+    return res.status(400).json({ error: 'Fòma JSON pa valab' });
   }
   const calculation = body.calculation?.trim();
   if (!calculation) {
-    return res.status(400).json({ error: 'No expression provided' });
+    return res.status(400).json({ error: 'Ou pa bay okenn ekspresyon matematik' });
   }
   try {
     const systemPrompt = "You are Asistan, an expert polymath specializing in Mathematics, Physics, and all scientific calculations.\nCRITICAL RULES:\n1. LANGUAGE: Always respond in the exact same language used by the user.\n2. CONTEXT: Thoroughly analyze and incorporate any specific user notes, variables, or constraints provided to tailor the calculation.\n3. STEP-BY-STEP LOGIC: Do not just give the answer. Deconstruct the solution into a clear, numbered logical path. Explain the reasoning and formulas for every step.";
     const userPrompt = `"${calculation}"`;
 
-    const aiRaw = await fetch('https://api.cloudflare.com/client/v4/accounts/49bdcdc6f29c08eda8bb7bcb8db9e27f/ai/run/@cf/meta/llama-3.1-8b-instruct', {
+    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer cfut_l8s5VxbFfnOVUvCoRkO5y0ufnTGwbAeq3RCiC7tic83923a8',
+        'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -980,12 +980,12 @@ app.post('/calcul', requireAuth, async (req, res) => {
       })
     });
     if (!aiRaw.ok) {
-      res.write("Que ce système n'est pas disponible actuellement.");
+      res.write("Sistèm sa a pa disponib kounye a.");
       return res.end();
     }
     const aiResponseStream = aiRaw.body;
     if (!aiResponseStream || !aiResponseStream.getReader) {
-      res.end("Que ce système n'est pas disponible actuellement.");
+      res.end("Sistèm sa a pa disponib kounye a.");
       return;
     }
     const reader = aiResponseStream.getReader();
@@ -1005,14 +1005,14 @@ app.post('/calcul', requireAuth, async (req, res) => {
             if (data.response) {
               res.write(data.response);
             }
-          } catch {}
+          } catch (e) {}
         }
       }
       await new Promise(resolve => setTimeout(resolve, 7));
     }
     res.end();
-  } catch {
-    res.write("Que ce système n'est pas disponible actuellement.");
+  } catch (e) {
+    res.write("Sistèm sa a pa disponib kounye a.");
     res.end();
   }
 });
@@ -1020,23 +1020,23 @@ app.post('/calcul', requireAuth, async (req, res) => {
 app.post('/qrcode', requireAuth, async (req, res) => {
   try {
     const text = req.body.text || '';
-    if (!text) return res.status(400).json({ error: 'No text provided' });
+    if (!text) return res.status(400).json({ error: 'Ou pa bay okenn tèks' });
     const fetchRes = await fetch(`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${encodeURIComponent(text)}`);
     const arrayBuf = await fetchRes.arrayBuffer();
     const url = await saveEphemeral(Buffer.from(arrayBuf), 'image/png', 'png');
     res.json({ url });
   } catch (e) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
 app.post('/compress', requireAuth, async (req, res) => {
   try {
     const buffer = await getRawBody(req);
-    if (buffer.length === 0) return res.status(400).json({ error: 'No file data' });
+    if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
     const isVideo = req.query.type === 'video';
     if (isVideo && buffer.length > 52428800) {
-      return res.status(400).json({ error: 'Vidéo trop grande pour être compressée' });
+      return res.status(400).json({ error: 'Videyo sa a twò gwo pou konprese l' });
     }
     const ext = isVideo ? 'mp4' : 'png';
     const tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}.${ext}`);
@@ -1053,14 +1053,14 @@ app.post('/compress', requireAuth, async (req, res) => {
     try { fs.unlinkSync(tmpIn); fs.unlinkSync(tmpOut); } catch (e) {}
     res.json({ url });
   } catch (e) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
 app.post('/resize', requireAuth, async (req, res) => {
   try {
     const buffer = await getRawBody(req);
-    if (buffer.length === 0) return res.status(400).json({ error: 'No file data' });
+    if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
     const width = req.query.width;
     const height = req.query.height;
     const tmpImg = path.join(os.tmpdir(), `in-res-${Date.now()}.png`);
@@ -1085,7 +1085,7 @@ app.post('/resize', requireAuth, async (req, res) => {
     try { fs.unlinkSync(tmpImg); } catch (e) {}
     res.json({ urls });
   } catch (e) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
@@ -1097,12 +1097,12 @@ app.post('/code/search', requireAuth, (req, res) => {
     const results = [];
     lines.forEach((line, index) => {
       if (line.includes(query)) {
-        results.push(`Ligne ${index + 1}: ${line.trim()}`);
+        results.push(`Liy ${index + 1}: ${line.trim()}`);
       }
     });
     res.json({ results });
   } catch (e) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
@@ -1127,23 +1127,23 @@ app.post('/code/syntax', requireAuth, (req, res) => {
       const openTags = (bodyCode.match(/<[a-zA-Z]+/g) || []).length;
       const closeTags = (bodyCode.match(/<\/[a-zA-Z]+/g) || []).length;
       if (openTags !== closeTags) {
-        errors.push(`Possible balise non fermée. Ouvertures: ${openTags}, Fermetures: ${closeTags}`);
+        errors.push(`Petèt yon tag pa fèmen. Ouvèti: ${openTags}, Fèmiti: ${closeTags}`);
       }
     }
     if (errors.length === 0) {
-      res.json({ status: 'Valide' });
+      res.json({ status: 'Valab' });
     } else {
-      res.json({ status: 'Erreurs détectées', errors });
+      res.json({ status: 'Nou jwenn erè', errors });
     }
   } catch (e) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
   try {
     const urls = req.body.images || [];
-    if (urls.length === 0) return res.status(400).json({ error: 'No images provided' });
+    if (urls.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn imaj' });
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
     const inputFiles = [];
     for (let i = 0; i < urls.length; i++) {
@@ -1163,19 +1163,19 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     res.json({ url: finalUrl });
   } catch (error) {
-    res.status(500).json({ error: "Que ce système n'est pas disponible actuellement." });
+    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
 app.put('/:filename', requireAuth, async (req, res) => {
   const filename = path.basename(req.params.filename || '');
   if (!filename) {
-    return res.status(400).json({ error: 'No filename provided' });
+    return res.status(400).json({ error: 'Ou pa mete non fichye a' });
   }
 
   const buffer = await getRawBody(req);
   if (buffer.length === 0) {
-    return res.status(400).json({ error: 'No file data provided' });
+    return res.status(400).json({ error: 'Ou pa voye okenn fichye' });
   }
 
   try {
@@ -1230,7 +1230,7 @@ app.get('/:filename', async (req, res, next) => {
 });
 
 app.use((req, res) => {
-  res.status(404).send('Not found');
+  res.status(404).send('Nou pa jwenn sa w ap chèche a');
 });
 
 app.listen(PORT, '0.0.0.0', () => {
