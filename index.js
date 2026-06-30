@@ -183,14 +183,23 @@ function getDisplayName(requestPath) {
 function buildViewerHtml(title, mediaUrl, filename) {
   const safeTitle = String(title).replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let mediaBlock = '';
+  
+  const isImg = isImageFile(filename);
+  const isVid = isDirectVideoFile(filename) || needsTranscode(filename);
+  const isAud = isAudioFile(filename);
 
-  if (isImageFile(filename)) {
-    mediaBlock = `<img src="${mediaUrl}" alt="${safeTitle}" />`;
-  } else if (isDirectVideoFile(filename) || needsTranscode(filename)) {
-    mediaBlock = `<video src="${mediaUrl}" controls autoplay playsinline preload="metadata"></video>`;
+  if (isImg) {
+    mediaBlock = `<img id="media-element" src="${mediaUrl}" alt="${safeTitle}" />`;
+  } else if (isVid) {
+    mediaBlock = `<video id="media-element" src="${mediaUrl}" controls autoplay playsinline preload="metadata"></video>`;
+  } else if (isAud) {
+    mediaBlock = `<audio id="media-element" src="${mediaUrl}" controls autoplay preload="metadata"></audio>`;
   } else {
     mediaBlock = `<a href="${mediaUrl}" style="color:#fff;font-family:Arial,sans-serif;word-break:break-all;text-decoration:none;font-size:18px;">${mediaUrl}</a>`;
   }
+
+  // Garantir que l'URL de téléchargement cible le fichier brut d'origine et évite les doubles extensions
+  const downloadUrl = mediaUrl.replace('transcode=1', 'raw=1');
 
   return `<!doctype html>
 <html lang="ht">
@@ -205,23 +214,75 @@ function buildViewerHtml(title, mediaUrl, filename) {
 <style>
 html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; }
 .wrap { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; position: relative; }
-img, video { max-width: 100%; max-height: 100%; object-fit: contain; outline: none; }
+img, video, audio { max-width: 100%; max-height: 100%; object-fit: contain; outline: none; }
+.download-btn {
+  position: absolute;
+  bottom: 30px;
+  z-index: 9999;
+  display: none; /* Masqué au départ pour les vidéos et audios */
+  background: rgba(255,255,255,0.2);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.3);
+  transition: opacity 0.3s ease, transform 0.2s ease;
+  cursor: pointer;
+  text-decoration: none;
+}
+.download-btn:active {
+  transform: scale(0.9);
+}
+.download-btn svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
 </style>
 </head>
 <body>
 <div class="wrap">
 ${mediaBlock}
 </div>
-<div style="position:absolute; bottom:30px; z-index:9999; display:flex; justify-content:center; width:100%;">
-<a href="${mediaUrl}&raw=1" download="${filename}" style="background:rgba(255,255,255,0.2); padding:12px 20px; border-radius:12px; color:#fff; text-decoration:none; font-family:sans-serif; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border: 1px solid rgba(255,255,255,0.3); font-size:16px;">Telechaje / Enregistrer</a>
+<div style="display:flex; justify-content:center; width:100%;">
+  <a id="download-btn" class="download-btn" href="${downloadUrl}" download="${filename}">
+    <svg viewBox="0 0 24 24">
+      <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/>
+    </svg>
+  </a>
 </div>
 <script>
 function forceDownload() {
-  window.location.href = "${mediaUrl}&raw=1";
+  window.location.href = "${downloadUrl}";
 }
-var mediaEl = document.querySelector('img, video');
+var mediaEl = document.getElementById('media-element');
+var btn = document.getElementById('download-btn');
+
 if (mediaEl) {
   mediaEl.addEventListener('error', forceDownload);
+  
+  if (mediaEl.tagName === 'IMG') {
+    // Les images chargent immédiatement, on affiche le bouton tout de suite
+    btn.style.display = 'flex';
+  } else {
+    // Pour les médias (vidéo/audio), on n'affiche le téléchargement qu'au début de la lecture réelle
+    mediaEl.addEventListener('playing', function() {
+      btn.style.display = 'flex';
+    });
+    // Fallback de sécurité au cas où l'événement playing est manqué
+    mediaEl.addEventListener('loadedmetadata', function() {
+      if (mediaEl.duration && mediaEl.currentTime > 0) {
+        btn.style.display = 'flex';
+      }
+    });
+  }
+} else {
+  // S'il n'y a pas d'élément média, afficher le bouton par défaut
+  btn.style.display = 'flex';
 }
 </script>
 </body>
@@ -682,7 +743,6 @@ app.post('/ai', requireAuth, async (req, res) => {
     let buffer = '';
 
     async function processChar(char) {
-      char = char.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}\u{1F900}-\u{1FAFF}\u2B50\u2B55\u231A\u231B\u23E9-\u23EC\u23F0\u23F3\u25FD\u25FE\u2614\u2615\u2648-\u2653\u267F\u2693\u26A1\u26AA\u26AB\u26BD\u26BE\u26C4\u26C5\u26CE\u26D4\u26EA\u26F2\u26F3\u26F5\u26FA\u26FD\u2705\u270A-\u270D\u2728\u274C\u274E\u2753-\u2755\u2757\u2795-\u2797\u27B0\u27BF\u2B1B\u2B1C]/gu, '');
       if (!char) return;
       if (!isBuffering) {
         if (char === '[') {
@@ -1013,7 +1073,7 @@ app.post('/calcul', requireAuth, async (req, res) => {
           try {
             const data = JSON.parse(cleanLine.slice(6));
             if (data.response) {
-              let cleanChunk = data.response.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}\u{1F900}-\u{1FAFF}\u2B50\u2B55\u231A\u231B\u23E9-\u23EC\u23F0\u23F3\u25FD\u25FE\u2614\u2615\u2648-\u2653\u267F\u2693\u26A1\u26AA\u26AB\u26BD\u26BE\u26C4\u26C5\u26CE\u26D4\u26EA\u26F2\u26F3\u26F5\u26FA\u26FD\u2705\u270A-\u270D\u2728\u274C\u274E\u2753-\u2755\u2757\u2795-\u2797\u27B0\u27BF\u2B1B\u2B1C]/gu, '');
+              let cleanChunk = data.response;
               if (cleanChunk) res.write(cleanChunk);
             }
           } catch (e) {}
