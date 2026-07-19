@@ -18,7 +18,7 @@ const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org'
 const CLOUDCONVERT_KEYS = [
   process.env.CLOUDCONVERT_API_KEY,
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYWU2YTc1NWE4OWEwODg3MTVkODhhNTZmMDM4OGE1OGNiZTY0OWJiZjZmYTViYzg3ZDkzNThkNTMwZWM3YjZmY2Q0Zjg4OTI2OWVmNDNmYWEiLCJpYXQiOjE3ODI4NDgxNDYuMTgwNzU3LCJuYmYiOjE3ODI4NDgxNDYuMTgwNzU4LCJleHAiOjQ5Mzg1MjE3NDYuMTc0OTgzLCJzdWIiOiI3NjE1ODM1NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsInByZXNldC53cml0ZSIsInByZXNldC5yZWFkIiwid2ViaG9vay53cml0ZSJdfQ.IWtqehZZt8E1mkxUii3g0CKwwHyYqcrL4rKmYbGmB6oNpjEIlKhiNjfqDKcdAjebBsinY2sqf7rMnAJ4DS9osBBYpRTZSvMbPSVvE0wWL5K9zzCthrSchhODv7yRMOhmZkwoPqqcg3X8zhLtPR7em2zrhSUWJYfMy7T8GwXDPWjhZ7UsU4dsFZttbxbVXp2HbUUqmKtHpW1QvlXsh9iwAUSuYZWRKKRfzMU5_m80lerl1OGWY-rxttDCBROAzpp93RflkPdgy_EW0msCEkC0Agkvl6Y9iFLge1VCYevjvuz6Tg_M1EU-4WieJJUA8SlVefxOE_6enbpY3KFV32tucUCvE3MIusBtSsyafdgcxtPCM06pOhmK53Ne4K-7EDA9eBHQAVIcprMoabiQH2gct_dZOb58pDtoItPKrNTFBzs1lWZpPZfMN7oVzlfeTnZnO-srbmLQg7tNRdDjx2an4VO_BQtuZbiysO8E99YBx2GlDsCulkt2yS6vjUhkW9SQQPS7i-X3b9QmpcmOXsaz71g9yON6WWEElqIyu9Zu0rGnJM1VBy6oYr-L_ZXlhKDLf_0SpCuyjq9IZ_k-ONL0jCYOWEi9MQVEnEW-wR7FmHtivNcf7vTWYnksjYSSue939W7nKboo_mwYVyRfINmibxLb6Ha1y9BHu9vsS-AR4jM',
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYjU5MWZiYTU5MzgzY2I0ZWI4NTJlYWEzNGMyOTAzNjVmMzdkMGEzYzllNjM4NjIwYzAzMDI0MmUyNmFhZTJlYTU2NzNkMDkyZDZlZjRhMDgiLCJpYXQiOjE3ODI4NTEwODguNzMzMjYyLCJuYmYiOjE3ODI4NTEwODguNzMzMjYzLCJleHAiOjQ5Mzg1MjQ2ODguNzI4MTQ5LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.NwXOyWgVrXMiJC7mk2NYUWFBy-9Dqs4UaxR2VezRWZe8Sx-QsI0HgpHhX8QsvuVa9VMr6ejg464IETha3vaCtpmwLEh2VPvzUd2FWYydQ4KSL4jO3TYBsnm0mwBaJoxmNUsXolK10O3maYqRXUCXj2sCTEe8pPKDKaL6xyUhCKj6u1VLJkQMXGeJVWxf624CPtiGiZ2_ihfRZIIckhVDMgzfy3kHqHwG-ElOTJ76_mF--P_tCsJHJ3C3S4BRo0xQlLzeWa-znI_Uy6PhbD8fEDTYFWm-eUPtVYxaMrc9_pcqPu7XIMpYkb8jI-pXNTFyyUspAIBs2Q1lJjyO_cnoGgjwjWKUPXkgkn7cyFS9ixV_GcYZtV6OV1jSPT0zgs-RQMBPdPK53dDSBFaZkd51NXzNu12ryPF9Bd5Uzib0Dh96IUtFY0xCWVqkVfe9nGrYHJMZygXz_ILZhf13YIgzIevs1iyaVh8ymIfk9P2-DnBuldAeHKFoPv_UCdFtfa2sFtB1NM6zMGvMtNUboJdgodYtemVsBuQ-P80ERWq3CDUI5rk9rcV1Rbg7mxvx56QUA8GQM8c1PjPq07muuqIVoj6cMyAFcK_rTpHV0_x36m_KAATOf8xwod_4VwKarLdjSE3vV1nHLSS83T0Cyv7zIdeAU1pyoQoeEf7bQY16q1U',
+  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYjU5MWZiYTU5MzgzY2I0ZWI4NTJlYWEzNGMyOTAzNjVmMzdkMGEzYzllNjM4NjIwYzAzMDI0MmUyNmFhZTJlYTU2NzNkMDkyZDZlZjRhMDgiLCJpYXQiOjE3ODI4NTEwODguNzMzMjYyLCJuYmYiOjE3ODI4NTEwODguNzMzMjYzLCJleHAiOjQ5Mzg1MjQ2ODguNzI4MTQ5LCJzdWIiOiI3NjE1ODg3MiIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.NwXOyWgVrXMiJC7mk2NYUWFBy-9Dqs4UaxR2VezRWZe8Sx-QsI0HgpHhX8QsvuVa9VMr6ejg464IETha3vaCtpmwLEh2VPvzUd2FWYydQ4KSL4jO3TYBsnm0mwBaJoxmNUsXolK10O3maYqRXUCXj2sCTEe8pPKDKaL6xyUhCKj6u1VLJkQMXGeJVWxf624CPtiGiZ2_ihfRZIIckhVDMgzfy3kHqHwG-ElOTJ76_mF--P_tCsJHJ3C3S4BRo0xQlLzeWa-znI_Uy6PhbD8fEDTYFWm-eUPtVYxaMrc9_pcqPu7XIMpYkb8jI-pXNTFyyUspAIBs2Q1lJjyO_cnoGgjwjWKUPXkgkn7cyFS9ixV_GcYZtV6OV1jSPT0zgs-RQMBPdPK53dDSBFaZkd51NXzNu12ryPF9Bd5Uzib0Dh96IUtFY0xCWVqkVfe9nGrYHJMZygXz_ILZhf13YIgzIevs1iyaVh8ymIfk9P2-DnBuldAeHKFoPv_UCdFtfa2sFtB1NM6zMGvMtNUboJdgodYtemVsBuQ-P80ERWq3CDUI5rk9rcV1Rbg7mxvx56QUA8GQM8c1PjPq07muuqIVoj6cMyAFcK_rTpHV0_x36m_KAATOf8xwod_4VwKarLdjSE3vV1nHLSS83T0Cyv7zIdeAU1pyoQoeEf7bQY16q1U',
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNWU4YTUwZTVmODczNWI3Y2RiMTczOTcyYTlmODFiMmQ4NGY5YzU4NmVmOGU4MWNiOTkwNWNjYWQ4ZGI0YWFmNTA0YjA5ZjkwZWNiMjg0N2UiLCJpYXQiOjE3ODI4NTExNTUuMzE5ODY1LCJuYmYiOjE3ODI4NTExNTUuMzE5ODY2LCJleHAiOjQ5Mzg1MjQ3NTUuMzE1NTQ2LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.J9UI0QSs4nFVlyfIXEBal71tvFL4Sd8P-oVlvtQKsy1z-8AB_E6MpKQVEOP39MBogTaawJVyrJTu4BYq2tYBYWuH5AsHXSF6vhNO2gwafvL0yoPXmV6jbAHT9gb0u9rn6K1qskPaqf-Aqr278uQqzDqAEk-Ws1hnbhAPr-4RFjd0pXWfFNn8Vy-lPtgJzXcYbE7i-zpf6g1Vu5YUbFhtkwDOmG97POhqSD9oqb284iX_iQMwlwLPA2A-bcRzmBuUrU1WgeFdYNubr-4pDH8b-p0Lx532CFcYNo9w2yeDmdmSaQyoykA-kyW5pffV6k5TRTvOyklNPqzWfJ4MILOK8iqBNbhpwsn9SFLrEuy6vsfGop0YBnnjnmlQ6SQsfiVhBje8_FcqHADOyTZrSWRtzsWpHx4Nkv1QosUMbHKAQ59zEORz2yim_CKkZkH6tcE8vcrG4TosEFDd6zE7UFeE-36YSLRZvQ8YMgxSKQ2UdYuaY0TgMZUM-Eg3UMUprRMUjMa8YuX49DteBm4YNP9oyKjpyqLAKnl8_M3ibUWnV0iV9zpe9qsZWbE8VEJ37lI90fhP-pLwQX-RV2bkS5J8dGqmYgmU4afzc4RJiiV85YTBOA28BaGoPobDB_mPSliJsZeEdNn8HtSt10cglcU9PasWJF3MdCnmKNzZuh4d6o4'
 ].filter(k => typeof k === 'string' && k.trim().length > 0);
 
@@ -90,11 +90,7 @@ async function uploadToBref(buffer, filename) {
 }
 
 function safeDecode(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch (e) {
-    return value;
-  }
+  try { return decodeURIComponent(value); } catch (e) { return value; }
 }
 
 function cleanRequestPath(reqPath) {
@@ -104,36 +100,14 @@ function cleanRequestPath(reqPath) {
 function contentTypeFromName(filename) {
   const ext = path.extname(filename).toLowerCase();
   const map = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.svg': 'image/svg+xml',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.mkv': 'video/x-matroska',
-    '.avi': 'video/x-msvideo',
-    '.wmv': 'video/x-ms-wmv',
-    '.flv': 'video/x-flv',
-    '.m4v': 'video/x-m4v',
-    '.3gp': 'video/3gpp',
-    '.ts': 'video/mp2t',
-    '.mpeg': 'video/mpeg',
-    '.mpg': 'video/mpeg',
-    '.m2ts': 'video/mp2t',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg',
-    '.m4a': 'audio/mp4',
-    '.pdf': 'application/pdf',
-    '.json': 'application/json',
-    '.txt': 'text/plain',
-    '.html': 'text/html',
-    '.css': 'text/css',
-    '.js': 'application/javascript'
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+    '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4',
+    '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo',
+    '.wmv': 'video/x-ms-wmv', '.flv': 'video/x-flv', '.m4v': 'video/x-m4v', '.3gp': 'video/3gpp',
+    '.ts': 'video/mp2t', '.mpeg': 'video/mpeg', '.mpg': 'video/mpeg', '.m2ts': 'video/mp2t',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+    '.pdf': 'application/pdf', '.json': 'application/json', '.txt': 'text/plain',
+    '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript'
   };
   return map[ext] || 'application/octet-stream';
 }
@@ -146,10 +120,6 @@ function isImageFile(filename) {
 function isAudioFile(filename) {
   const ext = path.extname(filename).toLowerCase();
   return ['.mp3', '.wav', '.ogg', '.m4a'].includes(ext);
-}
-
-function isPdfFile(filename) {
-  return path.extname(filename).toLowerCase() === '.pdf';
 }
 
 function isDirectVideoFile(filename) {
@@ -187,15 +157,10 @@ function buildViewerHtml(title, mediaUrl, filename) {
   const isVid = isDirectVideoFile(filename) || needsTranscode(filename);
   const isAud = isAudioFile(filename);
 
-  if (isImg) {
-    mediaBlock = `<img id="media-element" src="${mediaUrl}" alt="${safeTitle}" />`;
-  } else if (isVid) {
-    mediaBlock = `<video id="media-element" src="${mediaUrl}" controls autoplay playsinline preload="metadata"></video>`;
-  } else if (isAud) {
-    mediaBlock = `<audio id="media-element" src="${mediaUrl}" controls autoplay preload="metadata"></audio>`;
-  } else {
-    mediaBlock = `<a href="${mediaUrl}" style="color:#fff;font-family:Arial,sans-serif;word-break:break-all;text-decoration:none;font-size:18px;">${mediaUrl}</a>`;
-  }
+  if (isImg) mediaBlock = `<img id="media-element" src="${mediaUrl}" alt="${safeTitle}" />`;
+  else if (isVid) mediaBlock = `<video id="media-element" src="${mediaUrl}" controls autoplay playsinline preload="metadata"></video>`;
+  else if (isAud) mediaBlock = `<audio id="media-element" src="${mediaUrl}" controls autoplay preload="metadata"></audio>`;
+  else mediaBlock = `<a href="${mediaUrl}" style="color:#fff;font-family:Arial,sans-serif;word-break:break-all;text-decoration:none;font-size:18px;">${mediaUrl}</a>`;
 
   const downloadUrl = mediaUrl.replace('transcode=1', 'raw=1');
 
@@ -206,9 +171,6 @@ function buildViewerHtml(title, mediaUrl, filename) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${safeTitle}</title>
 <link rel="icon" type="image/png" href="${ICON_URL}">
-<link rel="shortcut icon" type="image/png" href="${ICON_URL}">
-<link rel="apple-touch-icon" href="${ICON_URL}">
-<meta name="theme-color" content="#000000">
 <style>
 html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; }
 .wrap { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; position: relative; }
@@ -463,6 +425,29 @@ async function performSearch(query) {
   }
 }
 
+app.post('/ai/clear', requireAuth, async (req, res) => {
+  const sess = req.body.session_id || 'global';
+  try {
+    const database = await getDb();
+    const msgIds = await database.collection('messages').find({ session_id: sess }).map(m => m.id).toArray();
+    if (msgIds.length > 0) {
+      await database.collection('attachments').deleteMany({ message_id: { $in: msgIds } });
+    }
+    await database.collection('messages').deleteMany({ session_id: sess });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Nou pa ka efase done yo kounye a.' });
+  }
+});
+
+app.post('/calcul/clear', requireAuth, async (req, res) => {
+  try {
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Nou pa ka efase done yo kounye a.' });
+  }
+});
+
 app.get('/status/:taskId', (req, res) => {
   const task = tasks.get(req.params.taskId);
   if (task) res.json(task);
@@ -517,30 +502,6 @@ app.get('/ai', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/ai/clear', requireAuth, async (req, res) => {
-  try {
-    const sess = req.body.session_id || 'global';
-    const database = await getDb();
-    const messagesCollection = database.collection('messages');
-    const attachmentsCollection = database.collection('attachments');
-    
-    const msgs = await messagesCollection.find({ session_id: sess }).toArray();
-    const msgIds = msgs.map(m => m.id);
-    
-    if (msgIds.length > 0) {
-      await attachmentsCollection.deleteMany({ message_id: { $in: msgIds } });
-      await messagesCollection.deleteMany({ session_id: sess });
-    }
-    res.json({ success: true, message: 'Tout mesaj yo efase avèk siksè.' });
-  } catch (e) {
-    res.status(500).json({ error: 'Erè pandan efase mesaj yo' });
-  }
-});
-
-app.post('/calcul/clear', requireAuth, async (req, res) => {
-  res.json({ success: true, message: 'Done kalkil yo efase.' });
-});
-
 app.post('/ai', requireAuth, async (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream',
@@ -590,20 +551,10 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    let imageIndex = 0;
-    let searchImageIndex = 0;
-
-    for (const key of contextAttMap.keys()) {
-      if (key.startsWith('[IMAGES: SEARCH_')) {
-        const num = parseInt(key.replace('[IMAGES: SEARCH_', '').replace(']', ''));
-        if (!isNaN(num) && num > searchImageIndex) searchImageIndex = num;
-      } else if (key.startsWith('[IMAGES: ')) {
-        const num = parseInt(key.replace('[IMAGES: ', '').replace(']', ''));
-        if (!isNaN(num) && num > imageIndex) imageIndex = num;
-      }
-    }
-
-    const systemPrompt = "You are Asistan. You HAVE the capability to search the web and generate images. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. To generate an image, output EXACTLY [IMAGE: english description] (example: [IMAGE: a beautiful sunset]). You can then refer to it using [IMAGES: X] where X is the image number. Do not guess.";
+    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n"
+      + "- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n"
+      + "- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\n"
+      + "You absolutely CAN generate searsh by using the [IMAGE: ...],  [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
@@ -614,20 +565,26 @@ app.post('/ai', requireAuth, async (req, res) => {
     let frontendMessage = '';
     let dbMessage = '';
     let attachmentsToSave = [];
+    let imageIndex = 0;
+    let searchImageIndex = 0;
     let allImages = [];
-    let isBuffering = false;
-    let buffer = '';
 
-    function sendToClient(str) {
+    function sendToClientFinal(str) {
       if (!str) return;
       res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
       frontendMessage += str;
       dbMessage += str;
     }
 
+    function sendToClientThink(str) {
+      if (!str) return;
+      res.write(JSON.stringify({ type: 'think', content: str }) + '\n');
+      dbMessage += str;
+    }
+
     async function handleTag(tag) {
-      const tImgMatch = tag.match(/^\[IMAGE:\s*(.*)\]$/i);
-      const tSrcMatch = tag.match(/^\[SEARCH:\s*(.*)\]$/i);
+      const tImgMatch = tag.match(/^\[IMAGE:\s*([\s\S]*?)\]$/i);
+      const tSrcMatch = tag.match(/^\[SEARCH:\s*([\s\S]*?)\]$/i);
       const tRefMatch = tag.match(/^\[IMAGES?:\s*(SEARCH_)?(\d+)\]$/i);
 
       if (tImgMatch) {
@@ -638,12 +595,13 @@ app.post('/ai', requireAuth, async (req, res) => {
         clearInterval(keepAliveImg);
         const dbTag = `[IMAGES: ${imageIndex}]`;
         if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
-        sendToClient(imgUrl ? `\n\n${imgUrl}\n\n` : '');
+        sendToClientFinal(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         const query = tSrcMatch[1].trim();
         const keepAliveSrc = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
+        
         let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
         if (searchRes.images && searchRes.images.length > 0) {
           allImages = allImages.concat(searchRes.images);
@@ -654,12 +612,14 @@ app.post('/ai', requireAuth, async (req, res) => {
             attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
           });
         }
-        const finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results. Respond strictly to the user's request without adding unrequested elements.\n\nResults:\n" + searchResultsText;
-        const contextLimit = context.slice(-6);
 
-        if (dbMessage.trim()) {
-          contextLimit.push({ role: 'assistant', content: dbMessage });
+        const preContent = frontendMessage.trim();
+        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below.\n\nResults:\n" + searchResultsText;
+        if (preContent) {
+            finalSystemPrompt += `\n\nImportant: You were in the middle of generating a response. This is what you already output:\n"""\n${preContent}\n"""\nContinue your thought directly from there using the search results without repeating what you already said. Do NOT use search tags again.`;
         }
+        
+        const contextLimit = context.slice(-6);
 
         try {
           const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, {
@@ -667,60 +627,10 @@ app.post('/ai', requireAuth, async (req, res) => {
             headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true })
           });
-          
           if (!aiFinalRaw.ok) {
-            sendToClient("Sistèm sa a pa disponib kounye a.");
+            sendToClientFinal("Sistèm sa a pa disponib kounye a.");
             return;
           }
-
-          let isThink = false;
-          let finalMatchBuffer = "";
-          
-          async function processFinalChar(char) {
-            if (!char) return;
-            if (!isThink) {
-              if (char === '<') {
-                if (finalMatchBuffer) {
-                  res.write(JSON.stringify({ type: 'final', content: finalMatchBuffer }) + '\n');
-                  frontendMessage += finalMatchBuffer;
-                  dbMessage += finalMatchBuffer;
-                }
-                finalMatchBuffer = '<';
-              } else {
-                finalMatchBuffer += char;
-                if ("<think>".startsWith(finalMatchBuffer)) {
-                  if (finalMatchBuffer === "<think>") {
-                    isThink = true;
-                    finalMatchBuffer = "";
-                  }
-                } else {
-                  res.write(JSON.stringify({ type: 'final', content: finalMatchBuffer }) + '\n');
-                  frontendMessage += finalMatchBuffer;
-                  dbMessage += finalMatchBuffer;
-                  finalMatchBuffer = "";
-                }
-              }
-            } else {
-              if (char === '<') {
-                if (finalMatchBuffer) {
-                  res.write(JSON.stringify({ type: 'think', content: finalMatchBuffer }) + '\n');
-                }
-                finalMatchBuffer = '<';
-              } else {
-                finalMatchBuffer += char;
-                if ("</think>".startsWith(finalMatchBuffer)) {
-                  if (finalMatchBuffer === "</think>") {
-                    isThink = false;
-                    finalMatchBuffer = "";
-                  }
-                } else {
-                  res.write(JSON.stringify({ type: 'think', content: finalMatchBuffer }) + '\n');
-                  finalMatchBuffer = "";
-                }
-              }
-            }
-          }
-
           const aiFinalStream = aiFinalRaw.body;
           if (aiFinalStream && aiFinalStream.getReader) {
             const readerFinal = aiFinalStream.getReader();
@@ -739,26 +649,13 @@ app.post('/ai', requireAuth, async (req, res) => {
                     const dataStr = cleanLineFinal.substring(5).trim();
                     const dataFinal = JSON.parse(dataStr);
                     if (dataFinal.response !== undefined && dataFinal.response !== null) {
-                      const strChunk = String(dataFinal.response);
-                      for (const c of strChunk) await processFinalChar(c);
+                      await processStr(String(dataFinal.response));
                     }
                   } catch (e) {}
                 }
               }
             }
           }
-
-          if (finalMatchBuffer) {
-            if (isThink) {
-              res.write(JSON.stringify({ type: 'think', content: finalMatchBuffer }) + '\n');
-            } else {
-              res.write(JSON.stringify({ type: 'final', content: finalMatchBuffer }) + '\n');
-              frontendMessage += finalMatchBuffer;
-              dbMessage += finalMatchBuffer;
-            }
-            finalMatchBuffer = "";
-          }
-
         } catch (e) {}
       } else if (tRefMatch) {
         const rawTag = tag.trim().toUpperCase();
@@ -770,51 +667,95 @@ app.post('/ai', requireAuth, async (req, res) => {
         if (foundUrl) {
           let cleanUrl = foundUrl;
           if (!cleanUrl.startsWith('\n')) cleanUrl = `\n\n${cleanUrl}\n\n`;
-          sendToClient(cleanUrl);
+          sendToClientFinal(cleanUrl);
         } else {
-          sendToClient(tag);
+          sendToClientFinal(tag);
         }
       } else {
-        sendToClient(tag);
+        sendToClientFinal(tag);
       }
     }
 
-    async function processChar(char) {
-      if (!char) return;
-      if (!isBuffering) {
-        if (char === '[') {
-          isBuffering = true;
-          buffer = '[';
+    let streamBuffer = '';
+    let isThinking = false;
+
+    async function processStr(str) {
+      if (!str) return;
+      streamBuffer += str;
+
+      while (true) {
+        if (!isThinking) {
+          const thinkStart = streamBuffer.indexOf('<think>');
+          if (thinkStart !== -1) {
+            sendToClientFinal(streamBuffer.substring(0, thinkStart));
+            isThinking = true;
+            dbMessage += '<think>\n';
+            streamBuffer = streamBuffer.substring(thinkStart + 7);
+            continue;
+          }
         } else {
-          sendToClient(char);
-        }
-      } else {
-        buffer += char;
-        if (char === ']') {
-          isBuffering = false;
-          await handleTag(buffer);
-          buffer = '';
-        } else if (buffer.length > 500) {
-          isBuffering = false;
-          sendToClient(buffer);
-          buffer = '';
-        } else {
-          const cleanBuf = buffer.replace(/\s+/g, '').toUpperCase();
-          const isMatch = "[IMAGE:".startsWith(cleanBuf) || cleanBuf.startsWith("[IMAGE:") ||
-                          "[SEARCH:".startsWith(cleanBuf) || cleanBuf.startsWith("[SEARCH:") ||
-                          "[IMAGES:".startsWith(cleanBuf) || cleanBuf.startsWith("[IMAGES:");
-          if (!isMatch) {
-            isBuffering = false;
-            sendToClient(buffer);
-            buffer = '';
+          const thinkEnd = streamBuffer.indexOf('</think>');
+          if (thinkEnd !== -1) {
+            sendToClientThink(streamBuffer.substring(0, thinkEnd));
+            isThinking = false;
+            dbMessage += '\n</think>\n';
+            streamBuffer = streamBuffer.substring(thinkEnd + 8);
+            continue;
           }
         }
+
+        const tagStart = streamBuffer.indexOf('[');
+        if (tagStart !== -1) {
+          const tagEnd = streamBuffer.indexOf(']', tagStart);
+          if (tagEnd !== -1) {
+            const tagContent = streamBuffer.substring(tagStart, tagEnd + 1);
+            if (/^\[(IMAGE|SEARCH|IMAGES?):/i.test(tagContent)) {
+              const beforeTag = streamBuffer.substring(0, tagStart);
+              if (isThinking) sendToClientThink(beforeTag);
+              else sendToClientFinal(beforeTag);
+
+              await handleTag(tagContent);
+
+              streamBuffer = streamBuffer.substring(tagEnd + 1);
+              continue;
+            } else {
+              const beforeBracket = streamBuffer.substring(0, tagStart + 1);
+              if (isThinking) sendToClientThink(beforeBracket);
+              else sendToClientFinal(beforeBracket);
+              streamBuffer = streamBuffer.substring(tagStart + 1);
+              continue;
+            }
+          } else {
+             if (streamBuffer.length - tagStart > 2500) {
+                 const beforeBracket = streamBuffer.substring(0, tagStart + 1);
+                 if (isThinking) sendToClientThink(beforeBracket);
+                 else sendToClientFinal(beforeBracket);
+                 streamBuffer = streamBuffer.substring(tagStart + 1);
+                 continue;
+             }
+             break;
+          }
+        }
+
+        let safeLen = streamBuffer.length - 10;
+        if (safeLen > 0) {
+          const lastLt = streamBuffer.lastIndexOf('<', safeLen);
+          const lastSq = streamBuffer.lastIndexOf('[', safeLen);
+          const maxLast = Math.max(lastLt, lastSq);
+          if (maxLast !== -1) safeLen = maxLast;
+          if (safeLen > 0) {
+            const chunkToFlush = streamBuffer.substring(0, safeLen);
+            if (isThinking) sendToClientThink(chunkToFlush);
+            else sendToClientFinal(chunkToFlush);
+            streamBuffer = streamBuffer.substring(safeLen);
+          }
+        }
+        break;
       }
     }
 
     if (!aiRaw.ok) {
-      const errMsg = "Sistèm sa a pa disponib kounye a.";
-      for (const char of errMsg) await processChar(char);
+      await processStr("Sistèm sa a pa disponib kounye a.");
     } else {
       const aiResponseStream = aiRaw.body;
       if (aiResponseStream && aiResponseStream.getReader) {
@@ -835,25 +776,28 @@ app.post('/ai', requireAuth, async (req, res) => {
                   const dataStr = cleanLine.substring(5).trim();
                   const data = JSON.parse(dataStr);
                   if (data.response !== undefined && data.response !== null) {
-                    const strChunk = String(data.response);
-                    for (const char of strChunk) await processChar(char);
+                    await processStr(String(data.response));
                   }
                 } catch (e) {}
               }
             }
           }
         } catch (e) {
-          const errMsg = "Gen yon erè ki fèt nan kouran an.";
-          for (const char of errMsg) await processChar(char);
+          await processStr("Gen yon erè ki fèt nan kouran an.");
         }
       } else {
-        const errMsg = "Mwen regrèt, mwen pa ka bay yon repons.";
-        for (const char of errMsg) await processChar(char);
+        await processStr("Mwen regrèt, mwen pa ka bay yon repons.");
       }
     }
 
-    if (isBuffering) {
-      sendToClient(buffer);
+    if (streamBuffer.length > 0) {
+      if (isThinking) {
+        sendToClientThink(streamBuffer);
+        dbMessage += streamBuffer + '\n</think>';
+      } else {
+        sendToClientFinal(streamBuffer);
+      }
+      streamBuffer = '';
     }
 
     try {
@@ -992,11 +936,7 @@ app.post('/compress', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Videyo sa a twò gwo' });
     }
     
-    let origFilename = req.query.filename || 
-                       req.headers['x-file-name'] || 
-                       req.headers['x-filename'] || 
-                       req.headers['file-name'] || 
-                       '';
+    let origFilename = req.query.filename || req.headers['x-file-name'] || req.headers['x-filename'] || req.headers['file-name'] || '';
 
     if (!origFilename && req.headers['content-disposition']) {
       const cd = req.headers['content-disposition'];
@@ -1098,7 +1038,7 @@ app.post('/compress', requireAuth, async (req, res) => {
     }
 
     const validKeys = CLOUDCONVERT_KEYS;
-    if (validKeys.length === 0) throw new Error("Echek");
+    if (validKeys.length === 0) throw new Error("Aucune clé API CloudConvert valide");
 
     let exportUrl = null;
     let jobSuccess = false;
@@ -1120,9 +1060,7 @@ app.post('/compress', requireAuth, async (req, res) => {
             body: JSON.stringify(payload)
           });
           
-          if (!ccRes.ok) {
-            continue;
-          }
+          if (!ccRes.ok) continue;
           
           const jobData = await ccRes.json();
           const jobId = jobData.data.id;
@@ -1169,13 +1107,11 @@ app.post('/compress', requireAuth, async (req, res) => {
       if (jobSuccess) break;
     }
 
-    if (!jobSuccess || !exportUrl) {
-      throw new Error("Echek");
-    }
+    if (!jobSuccess || !exportUrl) throw new Error("Echek jeneral konpresyon");
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const dlRes = await fetch(exportUrl);
-    if (!dlRes.ok) throw new Error("Echek");
+    if (!dlRes.ok) throw new Error("Echek telechajman");
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
     const finalUrl = await uploadToBref(dlBuf, finalRequestedName);
