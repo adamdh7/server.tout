@@ -32,7 +32,7 @@ for (let i = 1; i <= 20; i++) {
   }
 }
 
-const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'localhost:']);
+const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org:']);
 
 const s3 = new S3Client({
   region: 'auto',
@@ -65,7 +65,7 @@ const FFMPEG_AVAILABLE = (() => {
   }
 })();
 
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '70mb' }));
 
 const getRawBody = (req, taskId) => new Promise((resolve, reject) => {
   const chunks = [];
