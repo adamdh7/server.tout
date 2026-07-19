@@ -437,21 +437,22 @@ async function performSearch(query) {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true })
+      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true, include_answer: true })
     });
     const data = await res.json();
     let text = '';
     let foundImages = [];
     let foundLinks = [];
+    let ans = data.answer || '';
     if (data.images && data.images.length > 0) foundImages = data.images;
-    if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
+    if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [], answer: ans };
     for (const r of data.results) {
       text += 'URL: ' + (r.url || 'Lyen pa disponib') + '\nContenu: ' + r.content + '\n\n';
       if (r.url) foundLinks.push(r.url);
     }
-    return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
+    return { context: text.substring(0, 4000), images: foundImages, links: foundLinks, answer: ans };
   } catch (e) {
-    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [] };
+    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [], answer: '' };
   }
 }
 
@@ -571,11 +572,18 @@ app.post('/ai', requireAuth, async (req, res) => {
   activeStreams.set(sess, streamState);
   const signal = streamState.abortController.signal;
 
+  req.on('close', () => {
+    if (!res.writableEnded && streamState.abortController) {
+      streamState.abortController.abort();
+    }
+  });
+
+  const userMsgId = Date.now().toString() + Math.random().toString();
+
   try {
     const database = await getDb();
     const messagesCollection = database.collection('messages');
     const attachmentsCollection = database.collection('attachments');
-    const userMsgId = Date.now().toString() + Math.random().toString();
     await messagesCollection.insertOne({
       id: userMsgId, role: 'user', content: userMessage, session_id: sess, timestamp: new Date().toISOString()
     });
@@ -653,14 +661,17 @@ app.post('/ai', requireAuth, async (req, res) => {
         sendToClientFinal(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         const query = tSrcMatch[1].trim();
-        sendToClientThink(`M'ap chèche enfòmasyon sou: "${query}"...\n`);
+        
+        res.write(JSON.stringify({ type: 'think', content: query + '\n' }) + '\n');
         
         const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
         
-        sendToClientThink(`Rechèch la fini. M'ap analize rezilta yo pou ou...\n`);
+        if (searchRes.answer) {
+          res.write(JSON.stringify({ type: 'think', content: searchRes.answer + '\n\n' }) + '\n');
+        }
         
         let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
         if (searchRes.images && searchRes.images.length > 0) {
@@ -866,26 +877,40 @@ app.post('/ai', requireAuth, async (req, res) => {
       streamBuffer = '';
     }
 
-    try {
-      if (streamState.dbMessage.trim() !== '') {
-        const asstMsgId = Date.now().toString() + Math.random().toString();
-        await messagesCollection.insertOne({
-          id: asstMsgId, role: 'assistant', content: streamState.dbMessage, session_id: sess, timestamp: new Date().toISOString()
-        });
+    if (signal.aborted) {
+      try {
+        await messagesCollection.deleteOne({ id: userMsgId });
+        await attachmentsCollection.deleteMany({ message_id: userMsgId });
+      } catch (e) {}
+    } else {
+      try {
+        if (streamState.dbMessage.trim() !== '') {
+          const asstMsgId = Date.now().toString() + Math.random().toString();
+          await messagesCollection.insertOne({
+            id: asstMsgId, role: 'assistant', content: streamState.dbMessage, session_id: sess, timestamp: new Date().toISOString()
+          });
 
-        if (attachmentsToSave.length > 0) {
-          for (const att of attachmentsToSave) {
-            await attachmentsCollection.insertOne({ message_id: asstMsgId, placeholder: att.placeholder, url: att.url });
+          if (attachmentsToSave.length > 0) {
+            for (const att of attachmentsToSave) {
+              await attachmentsCollection.insertOne({ message_id: asstMsgId, placeholder: att.placeholder, url: att.url });
+            }
           }
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
     
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
     res.end();
   } catch (e) {
+    if (signal.aborted) {
+      try {
+        const database = await getDb();
+        await database.collection('messages').deleteOne({ id: userMsgId });
+        await database.collection('attachments').deleteMany({ message_id: userMsgId });
+      } catch (err) {}
+    }
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
