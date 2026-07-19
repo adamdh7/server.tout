@@ -32,7 +32,7 @@ for (let i = 1; i <= 20; i++) {
   }
 }
 
-const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org:']);
+const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'localhost:']);
 
 const s3 = new S3Client({
   region: 'auto',
@@ -49,7 +49,13 @@ let db;
 const tasks = new Map();
 
 async function getDb() {
-  if (!db) {
+  try {
+    if (!db) {
+      db = mongoClient.db('chatdb');
+    }
+    await db.command({ ping: 1 }, { maxTimeMS: 2000 });
+  } catch (e) {
+    try { await mongoClient.close(); } catch (err) {}
     await mongoClient.connect();
     db = mongoClient.db('chatdb');
   }
@@ -65,7 +71,7 @@ const FFMPEG_AVAILABLE = (() => {
   }
 })();
 
-app.use(express.json({ limit: '70mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 const getRawBody = (req, taskId) => new Promise((resolve, reject) => {
   const chunks = [];
@@ -658,7 +664,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                     const dataStr = cleanLineFinal.substring(5).trim();
                     const dataFinal = JSON.parse(dataStr);
                     if (dataFinal.response !== undefined && dataFinal.response !== null) {
-                      await processStr(String(dataFinal.response));
+                      await processStr(String(dataFinal.response), false);
                     }
                   } catch (e) {}
                 }
@@ -688,9 +694,10 @@ app.post('/ai', requireAuth, async (req, res) => {
     let streamBuffer = '';
     let isThinking = false;
 
-    async function processStr(str) {
-      if (!str) return;
+    async function processStr(str, allowSearch = true) {
+      if (!str) return false;
       streamBuffer += str;
+      let abortOuter = false;
 
       while (true) {
         if (!isThinking) {
@@ -726,6 +733,9 @@ app.post('/ai', requireAuth, async (req, res) => {
               await handleTag(tagContent);
 
               streamBuffer = streamBuffer.substring(tagEnd + 1);
+              if (allowSearch && /^\[SEARCH:/i.test(tagContent)) {
+                abortOuter = true;
+              }
               continue;
             } else {
               const beforeBracket = streamBuffer.substring(0, tagStart + 1);
@@ -761,6 +771,7 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
         break;
       }
+      return abortOuter;
     }
 
     if (!aiRaw) {
@@ -771,6 +782,7 @@ app.post('/ai', requireAuth, async (req, res) => {
         const reader = aiResponseStream.getReader();
         const decoder = new TextDecoder();
         let bufferMain = '';
+        let streamAborted = false;
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -785,11 +797,17 @@ app.post('/ai', requireAuth, async (req, res) => {
                   const dataStr = cleanLine.substring(5).trim();
                   const data = JSON.parse(dataStr);
                   if (data.response !== undefined && data.response !== null) {
-                    await processStr(String(data.response));
+                    const shouldAbort = await processStr(String(data.response), true);
+                    if (shouldAbort) {
+                      streamAborted = true;
+                      try { await reader.cancel(); } catch (err) {}
+                      break;
+                    }
                   }
                 } catch (e) {}
               }
             }
+            if (streamAborted) break;
           }
         } catch (e) {
           res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
