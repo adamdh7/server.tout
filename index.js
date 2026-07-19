@@ -566,7 +566,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, a helpful AI. Provide direct, accurate answers. Output [SEARCH: your query] to search the web for real-time info. Output [IMAGE: your english prompt] to generate images.";
+    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
