@@ -47,6 +47,7 @@ const mongoClient = new MongoClient(process.env.MONGO_URI);
 let db;
 
 const tasks = new Map();
+const activeStreams = new Map();
 
 async function getDb() {
   try {
@@ -398,14 +399,17 @@ async function servePublicFile(req, res, requestPath) {
   return serveS3RawFile(req, res, key, filename);
 }
 
-async function fetchAIFallback(model, bodyPayload) {
+async function fetchAIFallback(model, bodyPayload, signal) {
   for (const cred of CF_AI_CREDENTIALS) {
     try {
-      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cred.account}/ai/run/${model}`, {
+      const fetchOptions = {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${cred.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyPayload)
-      });
+      };
+      if (signal) fetchOptions.signal = signal;
+      
+      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cred.account}/ai/run/${model}`, fetchOptions);
       if (res.ok) return res;
     } catch (e) {}
   }
@@ -501,6 +505,15 @@ app.get('/Tout.png', async (req, res) => {
   }
 });
 
+app.get('/ai/recover', requireAuth, (req, res) => {
+  const sess = req.query.session_id || 'global';
+  if (activeStreams.has(sess)) {
+    res.json({ active: true, frontendMessage: activeStreams.get(sess).frontendMessage });
+  } else {
+    res.json({ active: false, frontendMessage: '' });
+  }
+});
+
 app.get('/ai', requireAuth, async (req, res) => {
   const sess = req.query.session_id || 'global';
   try {
@@ -543,7 +556,20 @@ app.post('/ai', requireAuth, async (req, res) => {
   const body = req.body;
   const userMessage = body.message?.trim();
   const sess = body.session_id || 'global';
-  if (!userMessage) return res.status(400).json({ error: 'Ou bay yon mesaj vid' });
+  
+  if (!userMessage) {
+    res.write(JSON.stringify({ type: 'error', content: 'Ou bay yon mesaj vid' }) + '\n');
+    return res.end();
+  }
+
+  if (activeStreams.has(sess)) {
+    try { activeStreams.get(sess).abortController.abort(); } catch (e) {}
+    activeStreams.delete(sess);
+  }
+  
+  const streamState = { abortController: new AbortController(), frontendMessage: '', dbMessage: '' };
+  activeStreams.set(sess, streamState);
+  const signal = streamState.abortController.signal;
 
   try {
     const database = await getDb();
@@ -561,12 +587,22 @@ app.post('/ai', requireAuth, async (req, res) => {
     if (recentMessages) {
         for (const m of recentMessages) {
             const l = (m.content || '').length + (m.role || '').length;
-            if (totalLength + l > 7000) break;
+            if (totalLength + l > 10000) break;
             validContext.push(m);
             totalLength += l;
         }
     }
     const context = validContext.reverse().map(m => ({ role: m.role, content: m.content }));
+    
+    let activeCharCount = userMessage.length;
+    for (const msg of context) {
+      activeCharCount += (msg.content || '').length;
+    }
+
+    let currentModel = '@cf/meta/llama-3.1-8b-instruct';
+    if (activeCharCount > 2000) {
+      currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
+    }
 
     const contextAttMap = new Map();
     if (validContext.length > 0) {
@@ -577,49 +613,54 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\nYou absolutely CAN generate searsh by using the [IMAGE: ...],  [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response";
+    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\nYou absolutely CAN generate search by using the [IMAGE: ...], [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response.\nIMPORTANT: Only generate an image if it is absolutely necessary or explicitly requested by the user. NEVER generate an image without a valid reason.";
 
-    const aiRaw = await fetchAIFallback('@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true });
+    const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
-    let frontendMessage = '';
-    let dbMessage = '';
     let attachmentsToSave = [];
     let imageIndex = 0;
     let searchImageIndex = 0;
     let allImages = [];
 
     function sendToClientFinal(str) {
-      if (!str) return;
+      if (!str || signal.aborted) return;
       res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
-      frontendMessage += str;
-      dbMessage += str;
+      streamState.frontendMessage += str;
+      streamState.dbMessage += str;
     }
 
     function sendToClientThink(str) {
-      if (!str) return;
+      if (!str || signal.aborted) return;
       res.write(JSON.stringify({ type: 'think', content: str }) + '\n');
-      dbMessage += str;
+      streamState.dbMessage += str;
     }
 
     async function handleTag(tag) {
-      const tImgMatch = tag.match(/^\[IMAGE:\s*([\s\S]*?)\]$/i);
-      const tSrcMatch = tag.match(/^\[SEARCH:\s*([\s\S]*?)\]$/i);
-      const tRefMatch = tag.match(/^\[IMAGES?:\s*(SEARCH_)?(\d+)\]$/i);
+      if (signal.aborted) return;
+      const tImgMatch = tag.match(/^\[\s*IMAGE\s*:\s*([\s\S]*?)\]$/i);
+      const tSrcMatch = tag.match(/^\[\s*SEARCH\s*:\s*([\s\S]*?)\]$/i);
+      const tRefMatch = tag.match(/^\[\s*IMAGES?\s*:\s*(SEARCH_)?(\d+)\]$/i);
 
       if (tImgMatch) {
         const prompt = tImgMatch[1].trim();
         imageIndex++;
-        const keepAliveImg = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
+        const keepAliveImg = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
         const imgUrl = await processAndUploadImage(prompt);
         clearInterval(keepAliveImg);
+        if (signal.aborted) return;
         const dbTag = `[IMAGES: ${imageIndex}]`;
         if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
         sendToClientFinal(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         const query = tSrcMatch[1].trim();
-        const keepAliveSrc = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
+        sendToClientThink(`M'ap chèche enfòmasyon sou: "${query}"...\n`);
+        
+        const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
+        if (signal.aborted) return;
+        
+        sendToClientThink(`Rechèch la fini. M'ap analize rezilta yo pou ou...\n`);
         
         let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
         if (searchRes.images && searchRes.images.length > 0) {
@@ -632,18 +673,18 @@ app.post('/ai', requireAuth, async (req, res) => {
           });
         }
 
-        const preContent = frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below.\n\nResults:\n" + searchResultsText;
+        const preContent = streamState.frontendMessage.trim();
+        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below. IMPORTANT: You MUST reply in the EXACT SAME LANGUAGE that the user used in their last message.\n\nResults:\n" + searchResultsText;
         if (preContent) {
             finalSystemPrompt += `\n\nImportant: You were in the middle of generating a response. This is what you already output:\n"""\n${preContent}\n"""\nContinue your thought directly from there using the search results without repeating what you already said. Do NOT use search tags again.`;
         }
         
-        const contextLimit = context.slice(-6);
+        const contextLimit = context.slice(-15);
 
         try {
-          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true });
+          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true }, signal);
           if (!aiFinalRaw) {
-            res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
+            if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
           }
           const aiFinalStream = aiFinalRaw.body;
@@ -651,9 +692,9 @@ app.post('/ai', requireAuth, async (req, res) => {
             const readerFinal = aiFinalStream.getReader();
             const decoderFinal = new TextDecoder();
             let bufferFinal = '';
-            while (true) {
+            while (!signal.aborted) {
               const { done, value } = await readerFinal.read();
-              if (done) break;
+              if (done || signal.aborted) break;
               bufferFinal += decoderFinal.decode(value, { stream: true });
               const linesFinal = bufferFinal.split('\n');
               bufferFinal = linesFinal.pop() || '';
@@ -686,8 +727,6 @@ app.post('/ai', requireAuth, async (req, res) => {
         } else {
           sendToClientFinal(tag);
         }
-      } else {
-        sendToClientFinal(tag);
       }
     }
 
@@ -695,17 +734,17 @@ app.post('/ai', requireAuth, async (req, res) => {
     let isThinking = false;
 
     async function processStr(str, allowSearch = true) {
-      if (!str) return false;
+      if (!str || signal.aborted) return false;
       streamBuffer += str;
       let abortOuter = false;
 
-      while (true) {
+      while (!signal.aborted) {
         if (!isThinking) {
           const thinkStart = streamBuffer.indexOf('<think>');
           if (thinkStart !== -1) {
             sendToClientFinal(streamBuffer.substring(0, thinkStart));
             isThinking = true;
-            dbMessage += '<think>\n';
+            streamState.dbMessage += '<think>\n';
             streamBuffer = streamBuffer.substring(thinkStart + 7);
             continue;
           }
@@ -714,7 +753,7 @@ app.post('/ai', requireAuth, async (req, res) => {
           if (thinkEnd !== -1) {
             sendToClientThink(streamBuffer.substring(0, thinkEnd));
             isThinking = false;
-            dbMessage += '\n</think>\n';
+            streamState.dbMessage += '\n</think>\n';
             streamBuffer = streamBuffer.substring(thinkEnd + 8);
             continue;
           }
@@ -725,7 +764,7 @@ app.post('/ai', requireAuth, async (req, res) => {
           const tagEnd = streamBuffer.indexOf(']', tagStart);
           if (tagEnd !== -1) {
             const tagContent = streamBuffer.substring(tagStart, tagEnd + 1);
-            if (/^\[(IMAGE|SEARCH|IMAGES?):/i.test(tagContent)) {
+            if (/^\[\s*(IMAGE|SEARCH|IMAGES?)\s*:/i.test(tagContent)) {
               const beforeTag = streamBuffer.substring(0, tagStart);
               if (isThinking) sendToClientThink(beforeTag);
               else sendToClientFinal(beforeTag);
@@ -733,7 +772,7 @@ app.post('/ai', requireAuth, async (req, res) => {
               await handleTag(tagContent);
 
               streamBuffer = streamBuffer.substring(tagEnd + 1);
-              if (allowSearch && /^\[SEARCH:/i.test(tagContent)) {
+              if (allowSearch && /^\[\s*SEARCH\s*:/i.test(tagContent)) {
                 abortOuter = true;
               }
               continue;
@@ -774,9 +813,9 @@ app.post('/ai', requireAuth, async (req, res) => {
       return abortOuter;
     }
 
-    if (!aiRaw) {
+    if (!aiRaw && !signal.aborted) {
       res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
-    } else {
+    } else if (aiRaw) {
       const aiResponseStream = aiRaw.body;
       if (aiResponseStream && aiResponseStream.getReader) {
         const reader = aiResponseStream.getReader();
@@ -784,9 +823,9 @@ app.post('/ai', requireAuth, async (req, res) => {
         let bufferMain = '';
         let streamAborted = false;
         try {
-          while (true) {
+          while (!signal.aborted) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || signal.aborted) break;
             bufferMain += decoder.decode(value, { stream: true });
             const lines = bufferMain.split('\n');
             bufferMain = lines.pop() || '';
@@ -810,17 +849,17 @@ app.post('/ai', requireAuth, async (req, res) => {
             if (streamAborted) break;
           }
         } catch (e) {
-          res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
+          if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
         }
       } else {
-        res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
+        if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
       }
     }
 
-    if (streamBuffer.length > 0) {
+    if (streamBuffer.length > 0 && !signal.aborted) {
       if (isThinking) {
         sendToClientThink(streamBuffer);
-        dbMessage += streamBuffer + '\n</think>';
+        streamState.dbMessage += streamBuffer + '\n</think>';
       } else {
         sendToClientFinal(streamBuffer);
       }
@@ -828,19 +867,28 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
 
     try {
-      const asstMsgId = Date.now().toString() + Math.random().toString();
-      await messagesCollection.insertOne({
-        id: asstMsgId, role: 'assistant', content: dbMessage, session_id: sess, timestamp: new Date().toISOString()
-      });
+      if (streamState.dbMessage.trim() !== '') {
+        const asstMsgId = Date.now().toString() + Math.random().toString();
+        await messagesCollection.insertOne({
+          id: asstMsgId, role: 'assistant', content: streamState.dbMessage, session_id: sess, timestamp: new Date().toISOString()
+        });
 
-      if (attachmentsToSave.length > 0) {
-        for (const att of attachmentsToSave) {
-          await attachmentsCollection.insertOne({ message_id: asstMsgId, placeholder: att.placeholder, url: att.url });
+        if (attachmentsToSave.length > 0) {
+          for (const att of attachmentsToSave) {
+            await attachmentsCollection.insertOne({ message_id: asstMsgId, placeholder: att.placeholder, url: att.url });
+          }
         }
       }
     } catch (e) {}
+    
+    if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
+      activeStreams.delete(sess);
+    }
     res.end();
   } catch (e) {
+    if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
+      activeStreams.delete(sess);
+    }
     res.end();
   }
 });
