@@ -1,6 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { MongoClient } = require('mongodb');
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
@@ -12,30 +11,16 @@ const app = express();
 app.set('trust proxy', true);
 
 const PORT = process.env.PORT || 3000;
-const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
 
 const CLOUDCONVERT_KEYS = [
   process.env.CLOUDCONVERT_API_KEY,
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYWU2YTc1NWE4OWEwODg3MTVkODhhNTZmMDM4OGE1OGNiZTY0OWJiZjZmYTViYzg3ZDkzNThkNTMwZWM3YjZmY2Q0Zjg4OTI2OWVmNDNmYWEiLCJpYXQiOjE3ODI4NDgxNDYuMTgwNzU3LCJuYmYiOjE3ODI4NDgxNDYuMTgwNzU4LCJleHAiOjQ5Mzg1MjE3NDYuMTc0OTgzLCJzdWIiOiI3NjE1ODM1NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsInByZXNldC53cml0ZSIsInByZXNldC5yZWFkIiwid2ViaG9vay53cml0ZSJdfQ.IWtqehZZt8E1mkxUii3g0CKwwHyYqcrL4rKmYbGmB6oNpjEIlKhiNjfqDKcdAjebBsinY2sqf7rMnAJ4DS9osBBYpRTZSvMbPSVvE0wWL5K9zzCthrSchhODv7yRMOhmZkwoPqqcg3X8zhLtPR7em2zrhSUWJYfMy7T8GwXDPWjhZ7UsU4dsFZttbxbVXp2HbUUqmKtHpW1QvlXsh9iwAUSuYZWRKKRfzMU5_m80lerl1OGWY-rxttDCBROAzpp93RflkPdgy_EW0msCEkC0Agkvl6Y9iFLge1VCYevjvuz6Tg_M1EU-4WieJJUA8SlVefxOE_6enbpY3KFV32tucUCvE3MIusBtSsyafdgcxtPCM06pOhmK53Ne4K-7EDA9eBHQAVIcprMoabiQH2gct_dZOb58pDtoItPKrNTFBzs1lWZpPZfMN7oVzlfeTnZnO-srbmLQg7tNRdDjx2an4VO_BQtuZbiysO8E99YBx2GlDsCulkt2yS6vjUhkW9SQQPS7i-X3b9QmpcmOXsaz71g9yON6WWEElqIyu9Zu0rGnJM1VBy6oYr-L_ZXlhKDLf_0SpCuyjq9IZ_k-ONL0jCYOWEi9MQVEnEW-wR7FmHtivNcf7vTWYnksjYSSue939W7nKboo_mwYVyRfINmibxLb6Ha1y9BHu9vsS-AR4jM',
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYjU5MWZiYTU5MzgzY2I0ZWI4NTJlYWEzNGMyOTAzNjVmMzdkMGEzYzllNjM4NjIwYzAzMDI0MmUyNmFhZTJlYTU2NzNkMDkyZDZlZjRhMDgiLCJpYXQiOjE3ODI4NTEwODguNzMzMjYyLCJuYmYiOjE3ODI4NTEwODguNzMzMjYzLCJleHAiOjQ5Mzg1MjQ2ODguNzI4MTQ5LCJzdWIiOiI3NjE1ODg3MiIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.NwXOyWgVrXMiJC7mk2NYUWFBy-9Dqs4UaxR2VezRWZe8Sx-QsI0HgpHhX8QsvuVa9VMr6ejg464IETha3vaCtpmwLEh2VPvzUd2FWYydQ4KSL4jO3TYBsnm0mwBaJoxmNUsXolK10O3maYqRXUCXj2sCTEe8pPKDKaL6xyUhCKj6u1VLJkQMXGeJVWxf624CPtiGiZ2_ihfRZIIckhVDMgzfy3kHqHwG-ElOTJ76_mF--P_tCsJHJ3C3S4BRo0xQlLzeWa-znI_Uy6PhbD8fEDTYFWm-eUPtVYxaMrc9_pcqPu7XIMpYkb8jI-pXNTFyyUspAIBs2Q1lJjyO_cnoGgjwjWKUPXkgkn7cyFS9ixV_GcYZtV6OV1jSPT0zgs-RQMBPdPK53dDSBFaZkd51NXzNu12ryPF9Bd5Uzib0Dh96IUtFY0xCWVqkVfe9nGrYHJMZygXz_ILZhf13YIgzIevs1iyaVh8ymIfk9P2-DnBuldAeHKFoPv_UCdFtfa2sFtB1NM6zMGvMtNUboJdgodYtemVsBuQ-P80ERWq3CDUI5rk9rcV1Rbg7mxvx56QUA8GQM8c1PjPq07muuqIVoj6cMyAFcK_rTpHV0_x36m_KAATOf8xwod_4VwKarLdjSE3vV1nHLSS83T0Cyv7zIdeAU1pyoQoeEf7bQY16q1U',
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNWU4YTUwZTVmODczNWI3Y2RiMTczOTcyYTlmODFiMmQ4NGY5YzU4NmVmOGU4MWNiOTkwNWNjYWQ4ZGI0YWFmNTA0YjA5ZjkwZWNiMjg0N2UiLCJpYXQiOjE3ODI4NTExNTUuMzE5ODY1LCJuYmYiOjE3ODI4NTExNTUuMzE5ODY2LCJleHAiOjQ5Mzg1MjQ3NTUuMzE1NTQ2LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.J9UI0QSs4nFVlyfIXEBal71tvFL4Sd8P-oVlvtQKsy1z-8AB_E6MpKQVEOP39MBogTaawJVyrJTu4BYq2tYBYWuH5AsHXSF6vhNO2gwafvL0yoPXmV6jbAHT9gb0u9rn6K1qskPaqf-Aqr278uQqzDqAEk-Ws1hnbhAPr-4RFjd0pXWfFNn8Vy-lPtgJzXcYbE7i-zpf6g1Vu5YUbFhtkwDOmG97POhqSD9oqb284iX_iQMwlwLPA2A-bcRzmBuUrU1WgeFdYNubr-4pDH8b-p0Lx532CFcYNo9w2yeDmdmSaQyoykA-kyW5pffV6k5TRTvOyklNPqzWfJ4MILOK8iqBNbhpwsn9SFLrEuy6vsfGop0YBnnjnmlQ6SQsfiVhBje8_FcqHADOyTZrSWRtzsWpHx4Nkv1QosUMbHKAQ59zEORz2yim_CKkZkH6tcE8vcrG4TosEFDd6zE7UFeE-36YSLRZvQ8YMgxSKQ2UdYuaY0TgMZUM-Eg3UMUprRMUjMa8YuX49DteBm4YNP9oyKjpyqLAKnl8_M3ibUWnV0iV9zpe9qsZWbE8VEJ37lI90fhP-pLwQX-RV2bkS5J8dGqmYgmU4afzc4RJiiV85YTBOA28BaGoPobDB_mPSliJsZeEdNn8HtSt10cglcU9PasWJF3MdCnmKNzZuh4d6o4',
-  '',
-  '',
-  '',
-  ''
+  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNWU4YTUwZTVmODczNWI3Y2RiMTczOTcyYTlmODFiMmQ4NGY5YzU4NmVmOGU4MWNiOTkwNWNjYWQ4ZGI0YWFmNTA0YjA5ZjkwZWNiMjg0N2UiLCJpYXQiOjE3ODI4NTExNTUuMzE5ODY1LCJuYmYiOjE3ODI4NTExNTUuMzE5ODY2LCJleHAiOjQ5Mzg1MjQ3NTUuMzE1NTQ2LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.J9UI0QSs4nFVlyfIXEBal71tvFL4Sd8P-oVlvtQKsy1z-8AB_E6MpKQVEOP39MBogTaawJVyrJTu4BYq2tYBYWuH5AsHXSF6vhNO2gwafvL0yoPXmV6jbAHT9gb0u9rn6K1qskPaqf-Aqr278uQqzDqAEk-Ws1hnbhAPr-4RFjd0pXWfFNn8Vy-lPtgJzXcYbE7i-zpf6g1Vu5YUbFhtkwDOmG97POhqSD9oqb284iX_iQMwlwLPA2A-bcRzmBuUrU1WgeFdYNubr-4pDH8b-p0Lx532CFcYNo9w2yeDmdmSaQyoykA-kyW5pffV6k5TRTvOyklNPqzWfJ4MILOK8iqBNbhpwsn9SFLrEuy6vsfGop0YBnnjnmlQ6SQsfiVhBje8_FcqHADOyTZrSWRtzsWpHx4Nkv1QosUMbHKAQ59zEORz2yim_CKkZkH6tcE8vcrG4TosEFDd6zE7UFeE-36YSLRZvQ8YMgxSKQ2UdYuaY0TgMZUM-Eg3UMUprRMUjMa8YuX49DteBm4YNP9oyKjpyqLAKnl8_M3ibUWnV0iV9zpe9qsZWbE8VEJ37lI90fhP-pLwQX-RV2bkS5J8dGqmYgmU4afzc4RJiiV85YTBOA28BaGoPobDB_mPSliJsZeEdNn8HtSt10cglcU9PasWJF3MdCnmKNzZuh4d6o4'
 ];
 
 const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'server.tout.adamdh7.org']);
-
-const s3 = new S3Client({
-  region: 'auto',
-  endpoint: process.env.S3_ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY_ID,
-    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY
-  }
-});
 
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 let db;
@@ -73,202 +58,17 @@ const getRawBody = (req, taskId) => new Promise((resolve, reject) => {
   req.on('error', reject);
 });
 
-async function cleanupEphemeralFiles() {
-  try {
-    const list = await s3.send(new ListObjectsV2Command({ Bucket: 'tout' }));
-    if (list.Contents) {
-      for (const item of list.Contents) {
-        if (item.Key.includes('tfsip')) {
-          await s3.send(new DeleteObjectCommand({ Bucket: 'tout', Key: item.Key }));
-        }
-      }
-    }
-  } catch (e) {}
-}
-cleanupEphemeralFiles();
-
-async function saveEphemeral(buffer, contentType, filenameOrExt) {
-  const randomNum = Math.floor(Math.random() * 10000000).toString();
-  let nameToUse = filenameOrExt;
-  if (!nameToUse.includes('.')) {
-    nameToUse = `tfsip-${Date.now()}.${filenameOrExt}`;
-  } else if (!nameToUse.startsWith('tfsip-')) {
-    nameToUse = `tfsip-${nameToUse}`;
-  }
-  const key = `TF-${randomNum}/${nameToUse}`;
-  console.log(`[S3 UPLOAD] Préparation de l'envoi de ${key} (${buffer.length} octets, type: ${contentType})`);
-  await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: key, Body: buffer, ContentType: contentType }));
-  console.log(`[S3 UPLOAD SUCCESS] Fichier stocké sur S3 sous la clé: ${key}`);
-  setTimeout(async () => {
-    try {
-      await s3.send(new DeleteObjectCommand({ Bucket: 'tout', Key: key }));
-      console.log(`[S3 AUTO-CLEANUP] Fichier éphémère supprimé: ${key}`);
-    } catch (e) {}
-  }, 420000);
-  return `https://server.tout.adamdh7.org/${key}`;
-}
-
-function safeDecode(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch (e) {
-    return value;
-  }
-}
-
-function cleanRequestPath(reqPath) {
-  return safeDecode(reqPath || '').replace(/^\/+/, '');
-}
-
-function contentTypeFromName(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  const map = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.svg': 'image/svg+xml',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.mkv': 'video/x-matroska',
-    '.avi': 'video/x-msvideo',
-    '.wmv': 'video/x-ms-wmv',
-    '.flv': 'video/x-flv',
-    '.m4v': 'video/x-m4v',
-    '.3gp': 'video/3gpp',
-    '.ts': 'video/mp2t',
-    '.mpeg': 'video/mpeg',
-    '.mpg': 'video/mpeg',
-    '.m2ts': 'video/mp2t',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg',
-    '.m4a': 'audio/mp4',
-    '.pdf': 'application/pdf',
-    '.json': 'application/json',
-    '.txt': 'text/plain',
-    '.html': 'text/html',
-    '.css': 'text/css',
-    '.js': 'application/javascript'
-  };
-  return map[ext] || 'application/octet-stream';
-}
-
-function isImageFile(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext);
-}
-
-function isAudioFile(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  return ['.mp3', '.wav', '.ogg', '.m4a'].includes(ext);
-}
-
-function isPdfFile(filename) {
-  return path.extname(filename).toLowerCase() === '.pdf';
-}
-
-function isDirectVideoFile(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  return ['.mp4', '.webm', '.m4v'].includes(ext);
-}
-
-function needsTranscode(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  return ['.mov', '.mkv', '.avi', '.wmv', '.flv', '.3gp', '.ts', '.mpeg', '.mpg', '.m2ts'].includes(ext);
-}
-
-function encodePathSegments(requestPath) {
-  return requestPath.split('/').map(part => encodeURIComponent(part)).join('/');
-}
-
-function buildMediaUrl(requestPath, mode) {
-  return `/${encodePathSegments(requestPath)}?${mode}=1`;
-}
-
-function getDisplayName(requestPath) {
-  const clean = requestPath.replace(/^\/+/, '');
-  const parts = clean.split('/').filter(Boolean);
-  if (parts.length === 0) return 'Tout';
-  if (/^TF-/i.test(parts[0]) && parts[1]) {
-    return path.basename(parts[1], path.extname(parts[1])).replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Tout';
-  }
-  return path.basename(parts[parts.length - 1], path.extname(parts[parts.length - 1])) || 'Tout';
-}
-
-function buildViewerHtml(title, mediaUrl, filename) {
-  const safeTitle = String(title).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  let mediaBlock = '';
-  const isImg = isImageFile(filename);
-  const isVid = isDirectVideoFile(filename) || needsTranscode(filename);
-  const isAud = isAudioFile(filename);
-
-  if (isImg) {
-    mediaBlock = `<img id="media-element" src="${mediaUrl}" alt="${safeTitle}" />`;
-  } else if (isVid) {
-    mediaBlock = `<video id="media-element" src="${mediaUrl}" controls autoplay playsinline preload="metadata"></video>`;
-  } else if (isAud) {
-    mediaBlock = `<audio id="media-element" src="${mediaUrl}" controls autoplay preload="metadata"></audio>`;
-  } else {
-    mediaBlock = `<a href="${mediaUrl}" style="color:#fff;font-family:Arial,sans-serif;word-break:break-all;text-decoration:none;font-size:18px;">${mediaUrl}</a>`;
-  }
-
-  const downloadUrl = mediaUrl.replace('transcode=1', 'raw=1');
-
-  return `<!doctype html>
-<html lang="ht">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${safeTitle}</title>
-<link rel="icon" type="image/png" href="${ICON_URL}">
-<link rel="shortcut icon" type="image/png" href="${ICON_URL}">
-<link rel="apple-touch-icon" href="${ICON_URL}">
-<meta name="theme-color" content="#000000">
-<style>
-html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; }
-.wrap { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; position: relative; }
-img, video, audio { max-width: 100%; max-height: 100%; object-fit: contain; outline: none; }
-.download-btn {
-  position: absolute; bottom: 30px; z-index: 9999; display: none; background: rgba(255,255,255,0.2); width: 56px; height: 56px; border-radius: 50%; align-items: center; justify-content: center; color: #fff; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); transition: opacity 0.3s ease, transform 0.2s ease; cursor: pointer; text-decoration: none;
-}
-.download-btn:active { transform: scale(0.9); }
-.download-btn svg { width: 24px; height: 24px; fill: currentColor; }
-</style>
-</head>
-<body>
-<div class="wrap">${mediaBlock}</div>
-<div style="display:flex; justify-content:center; width:100%;">
-  <a id="download-btn" class="download-btn" href="${downloadUrl}" download="${filename}">
-    <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
-  </a>
-</div>
-<script>
-function forceDownload() { window.location.href = "${downloadUrl}"; }
-var mediaEl = document.getElementById('media-element');
-var btn = document.getElementById('download-btn');
-if (mediaEl) {
-  mediaEl.addEventListener('error', forceDownload);
-  if (mediaEl.tagName === 'IMG') { btn.style.display = 'flex'; }
-  else {
-    mediaEl.addEventListener('playing', function() { btn.style.display = 'flex'; });
-    mediaEl.addEventListener('loadedmetadata', function() { if (mediaEl.duration && mediaEl.currentTime > 0) { btn.style.display = 'flex'; } });
-  }
-} else { btn.style.display = 'flex'; }
-</script>
-</body>
-</html>`;
-}
-
-function sendUnknown(req, res) {
-  if (req.headers.accept && req.headers.accept.includes('text/html')) {
-    res.status(404).send('<!doctype html><html lang="ht"><head><meta charset="UTF-8"><title>Enkoni</title></head><body style="background:#000;color:#fff;text-align:center;padding:50px;font-family:sans-serif;"><h1>Enkoni</h1><script>setTimeout(function(){ window.close(); window.history.back(); }, 1500);</script></body></html>');
-  } else {
-    res.status(404).send('Enkoni');
-  }
+async function uploadToBref(buffer, contentType, filename) {
+  const formData = new FormData();
+  const blob = new Blob([buffer], { type: contentType || 'application/octet-stream' });
+  formData.append('file', blob, filename || 'file.dat');
+  const res = await fetch('https://bref.adamdh7.org/upload', {
+    method: 'POST',
+    body: formData
+  });
+  if (!res.ok) throw new Error('Echek upload');
+  const data = await res.json();
+  return data.url;
 }
 
 function getUrlHost(value) {
@@ -334,111 +134,6 @@ function corsAndOptions(req, res, next) {
 }
 app.use(corsAndOptions);
 
-function isReservedPublicName(name) {
-  return ['ok', 'health', 'ai', 'jerere', 'calcul', 'Tout.png', 'favicon.ico', 'qrcode', 'compress', 'resize', 'code', 'images-to-pdf', 'upload', 'status'].includes(name.split('/')[0]);
-}
-
-async function resourceExists(requestPath) {
-  const key = cleanRequestPath(requestPath);
-  try {
-    await s3.send(new HeadObjectCommand({ Bucket: 'tout', Key: key }));
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-async function serveS3RawFile(req, res, key, filename) {
-  try {
-    const range = req.headers.range;
-    const params = { Bucket: 'tout', Key: key };
-    if (range) params.Range = range;
-    const s3Response = await s3.send(new GetObjectCommand(params));
-    res.setHeader('Content-Type', s3Response.ContentType || contentTypeFromName(filename));
-    res.setHeader('Accept-Ranges', 'bytes');
-    if (s3Response.ContentRange) res.setHeader('Content-Range', s3Response.ContentRange);
-    if (s3Response.ContentLength) res.setHeader('Content-Length', s3Response.ContentLength);
-    res.status(range ? 206 : 200);
-    if (!s3Response.Body) return res.end();
-    s3Response.Body.pipe(res);
-  } catch (e) {
-    sendUnknown(req, res);
-  }
-}
-
-function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
-  const stop = () => {
-    abort();
-    try { if (inputStream.destroy) inputStream.destroy(); } catch (e) {}
-    try { if (ffmpeg.stdin) ffmpeg.stdin.destroy(); } catch (e) {}
-  };
-  res.on('close', stop);
-  res.on('finish', stop);
-  if (inputStream && inputStream.on) inputStream.on('error', stop);
-}
-
-function transcodeVideoStreamToMp4(inputStream, res) {
-  if (!FFMPEG_AVAILABLE) {
-    res.status(415).type('text/plain').send('Pa gen ffmpeg sou sèvè a');
-    return;
-  }
-  res.status(200);
-  res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Accept-Ranges', 'none');
-  const ffmpeg = spawn('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
-  const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) {} };
-  reqLikeCleanup(inputStream, ffmpeg, res, abort);
-  inputStream.pipe(ffmpeg.stdin);
-  ffmpeg.stdout.pipe(res);
-  let stderr = '';
-  ffmpeg.stderr.on('data', chunk => { stderr += chunk.toString(); });
-  let responded = false;
-  ffmpeg.on('error', () => {
-    if (responded) return;
-    responded = true;
-    if (!res.headersSent) res.status(500).type('text/plain').send('Erè ffmpeg');
-  });
-  ffmpeg.on('close', code => {
-    if (responded) return;
-    responded = true;
-    if (code !== 0 && !res.headersSent) res.status(415).type('text/plain').send(stderr || 'Pa ka konvèti videyo sa a');
-    else if (code !== 0 && !res.writableEnded) res.end();
-  });
-}
-
-async function serveS3VideoTranscode(req, res, key) {
-  try {
-    const s3Response = await s3.send(new GetObjectCommand({ Bucket: 'tout', Key: key }));
-    if (!s3Response.Body) return sendUnknown(req, res);
-    transcodeVideoStreamToMp4(s3Response.Body, res);
-  } catch (e) {
-    sendUnknown(req, res);
-  }
-}
-
-async function servePublicFile(req, res, requestPath) {
-  const key = cleanRequestPath(requestPath);
-  const filename = path.basename(key) || 'Tout';
-  const browserView = isBrowserLikeRequest(req) && (req.headers.accept || '').includes('text/html');
-  const wantsRaw = req.query.raw === '1';
-  const wantsTranscode = req.query.transcode === '1';
-  if (wantsRaw) res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  if (browserView && !wantsRaw && !wantsTranscode) {
-    const exists = await resourceExists(key);
-    if (!exists) return sendUnknown(req, res);
-    const isImageOrVideo = isImageFile(filename) || isDirectVideoFile(filename) || needsTranscode(filename);
-    if (!isImageOrVideo) {
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      return serveS3RawFile(req, res, key, filename);
-    }
-    const mediaMode = needsTranscode(filename) && FFMPEG_AVAILABLE ? 'transcode' : 'raw';
-    const mediaUrl = buildMediaUrl(key, mediaMode);
-    return res.status(200).type('html').send(buildViewerHtml(getDisplayName(key), mediaUrl, filename));
-  }
-  if (wantsTranscode && needsTranscode(filename) && FFMPEG_AVAILABLE) return serveS3VideoTranscode(req, res, key);
-  return serveS3RawFile(req, res, key, filename);
-}
-
 async function processAndUploadImage(prompt) {
   try {
     await new Promise(resolve => setTimeout(resolve, 7));
@@ -453,11 +148,7 @@ async function processAndUploadImage(prompt) {
     if (!aiResponse || !aiResponse.result || !aiResponse.result.image) return '';
     const binaryString = atob(aiResponse.result.image);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    const randomNum = Math.floor(Math.random() * 10000000).toString();
-    const filename = `TF-${randomNum}.png`;
-    await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: filename, Body: bytes, ContentType: 'image/png' }));
-    await new Promise(resolve => setTimeout(resolve, 7));
-    return `https://server.tout.adamdh7.org/${filename}`;
+    return await uploadToBref(bytes, 'image/png', `gen-${Date.now()}.png`);
   } catch (e) {
     return '';
   }
@@ -500,19 +191,8 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, tokenRequiredForPrivateRoutes: true, trustedBrowserHosts: Array.from(TRUSTED_BROWSER_HOSTS) });
 });
 
-app.get('/Tout.png', async (req, res) => {
-  try {
-    const object = await s3.send(new GetObjectCommand({ Bucket: 'tout', Key: 'Tout.png' }));
-    res.setHeader('Content-Type', object.ContentType || 'image/png');
-    if (object.ContentLength) res.setHeader('Content-Length', object.ContentLength);
-    if (object.Body) {
-      object.Body.pipe(res);
-      return;
-    }
-    res.status(404).send('Nou pa jwenn imaj la');
-  } catch (e) {
-    res.status(404).send('Nou pa jwenn imaj la');
-  }
+app.get('/Tout.png', (req, res) => {
+  res.redirect('https://adamdh7.org/adamdh7.png');
 });
 
 app.get('/ai', requireAuth, async (req, res) => {
@@ -594,7 +274,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
+    const systemPrompt = "Tu es Asistan, un assistant IA intelligent. Utilise le tag [IMAGE: description en anglais] pour générer des images, et [SEARCH: requête] pour faire des recherches si nécessaire. Réponds naturellement et de manière concise dans la langue de l'utilisateur.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
@@ -649,7 +329,7 @@ app.post('/ai', requireAuth, async (req, res) => {
             attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
           });
         }
-        const finalSystemPrompt = "You are Asistan. Answer the user in their language. Synthesize a natural, direct, and conversational response using the provided search results. Respond strictly to the user's expectations. Do not include anything that was not requested. Answer only the specific prompt that triggered the search. Do not integrate elements that the user never asked for in their request.\n\nResults:\n" + searchResultsText;
+        const finalSystemPrompt = "Tu es Asistan. Voici les résultats de la recherche :\n" + searchResultsText + "\nRéponds à la question de l'utilisateur naturellement à partir de ces informations.";
         const contextLimit = context.slice(-6);
 
         try {
@@ -671,15 +351,22 @@ app.post('/ai', requireAuth, async (req, res) => {
               const { done, value } = await readerFinal.read();
               if (done) break;
               bufferFinal += decoderFinal.decode(value, { stream: true });
-              const linesFinal = bufferFinal.split('\n');
-              bufferFinal = linesFinal.pop();
-              for (const lineFinal of linesFinal) {
-                const cleanLineFinal = lineFinal.trim();
-                if (cleanLineFinal.startsWith('data: ') && cleanLineFinal !== 'data: [DONE]') {
+              const linesFinal = bufferFinal.split(/\r?\n/);
+              bufferFinal = linesFinal.pop() || '';
+              for (let lineFinal of linesFinal) {
+                lineFinal = lineFinal.trim();
+                if (!lineFinal || lineFinal.startsWith(':') || lineFinal === 'data: [DONE]') continue;
+                if (lineFinal.startsWith('data:')) {
                   try {
-                    const dataFinal = JSON.parse(cleanLineFinal.slice(6));
-                    if (dataFinal.response) {
-                      for (const c of dataFinal.response) await processChar(c);
+                    const dataFinal = JSON.parse(lineFinal.substring(5).trim());
+                    let chunkStrFinal = "";
+                    if (dataFinal.response !== undefined) {
+                      chunkStrFinal = String(dataFinal.response);
+                    } else if (dataFinal.choices && dataFinal.choices[0] && dataFinal.choices[0].delta && dataFinal.choices[0].delta.content !== undefined) {
+                      chunkStrFinal = String(dataFinal.choices[0].delta.content);
+                    }
+                    if (chunkStrFinal) {
+                      for (const c of chunkStrFinal) await processChar(c);
                     }
                   } catch (e) {}
                 }
@@ -750,15 +437,22 @@ app.post('/ai', requireAuth, async (req, res) => {
             const { done, value } = await reader.read();
             if (done) break;
             bufferMain += decoder.decode(value, { stream: true });
-            const lines = bufferMain.split('\n');
-            bufferMain = lines.pop();
-            for (const line of lines) {
-              const cleanLine = line.trim();
-              if (cleanLine.startsWith('data: ') && cleanLine !== 'data: [DONE]') {
+            const lines = bufferMain.split(/\r?\n/);
+            bufferMain = lines.pop() || '';
+            for (let line of lines) {
+              line = line.trim();
+              if (!line || line.startsWith(':') || line === 'data: [DONE]') continue;
+              if (line.startsWith('data:')) {
                 try {
-                  const data = JSON.parse(cleanLine.slice(6));
-                  if (data.response) {
-                    for (const char of data.response) await processChar(char);
+                  const data = JSON.parse(line.substring(5).trim());
+                  let chunkStr = "";
+                  if (data.response !== undefined) {
+                    chunkStr = String(data.response);
+                  } else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content !== undefined) {
+                    chunkStr = String(data.choices[0].delta.content);
+                  }
+                  if (chunkStr) {
+                    for (const char of chunkStr) await processChar(char);
                   }
                 } catch (e) {}
               }
@@ -813,14 +507,11 @@ app.post('/jerere', requireAuth, async (req, res) => {
     if (!aiRaw.ok) return res.status(503).json({ error: "Sistèm sa a pa disponib kounye a." });
     const aiResponse = await aiRaw.json();
     await new Promise(resolve => setTimeout(resolve, 7));
-    if (!aiResponse || !aiResponse.result || !aiResponse.result.image) throw new Error("Entèlijans atifisyèl la pa bay yon imaj ki valab.");
+    if (!aiResponse || !aiResponse.result || !aiResponse.result.image) throw new Error("Echek");
     const binaryString = atob(aiResponse.result.image);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    const randomNum = Math.floor(Math.random() * 10000000).toString();
-    const filename = `TF-${randomNum}.png`;
-    await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: filename, Body: bytes, ContentType: 'image/png' }));
-    await new Promise(resolve => setTimeout(resolve, 7));
-    res.json({ url: `https://server.tout.adamdh7.org/${filename}` });
+    const url = await uploadToBref(bytes, 'image/png', `gen-${Date.now()}.png`);
+    res.json({ url });
   } catch (error) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -846,7 +537,7 @@ app.post('/calcul', requireAuth, async (req, res) => {
   const calculation = body.calculation?.trim();
   if (!calculation) return res.status(400).json({ error: 'Ou pa bay okenn ekspresyon matematik' });
   try {
-    const systemPrompt = "You are Asistan, an expert polymath specializing in Mathematics, Physics, and all scientific calculations.\nCRITICAL RULES:\n1. LANGUAGE: Always respond in the exact same language used by the user.\n2. CONTEXT: Thoroughly analyze and incorporate any specific user notes, variables, or constraints provided to tailor the calculation.\n3. STEP-BY-STEP LOGIC: Do not just give the answer. Deconstruct the solution into a clear, numbered logical path. Explain the reasoning and formulas for every step.";
+    const systemPrompt = "Tu es un expert en sciences et mathématiques. Résous l'expression étape par étape clairement dans la langue de l'utilisateur.";
     const userPrompt = `"${calculation}"`;
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
@@ -870,17 +561,21 @@ app.post('/calcul', requireAuth, async (req, res) => {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
+      const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
-      for (const line of lines) {
-        const cleanLine = line.trim();
-        if (cleanLine.startsWith('data: ') && cleanLine !== 'data: [DONE]') {
+      for (let line of lines) {
+        line = line.trim();
+        if (!line || line.startsWith(':') || line === 'data: [DONE]') continue;
+        if (line.startsWith('data:')) {
           try {
-            const data = JSON.parse(cleanLine.slice(6));
-            if (data.response) {
-              let cleanChunk = data.response;
-              if (cleanChunk) res.write(cleanChunk);
+            const data = JSON.parse(line.substring(5).trim());
+            let chunkStr = "";
+            if (data.response !== undefined) {
+              chunkStr = String(data.response);
+            } else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content !== undefined) {
+              chunkStr = String(data.choices[0].delta.content);
             }
+            if (chunkStr) res.write(chunkStr);
           } catch (e) {}
         }
       }
@@ -899,7 +594,7 @@ app.post('/qrcode', requireAuth, async (req, res) => {
     if (!text) return res.status(400).json({ error: 'Ou pa bay okenn tèks' });
     const fetchRes = await fetch(`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${encodeURIComponent(text)}`);
     const arrayBuf = await fetchRes.arrayBuffer();
-    const url = await saveEphemeral(Buffer.from(arrayBuf), 'image/png', 'png');
+    const url = await uploadToBref(Buffer.from(arrayBuf), 'image/png', `qr-${Date.now()}.png`);
     res.json({ url });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
@@ -908,26 +603,15 @@ app.post('/qrcode', requireAuth, async (req, res) => {
 
 app.post('/compress', requireAuth, async (req, res) => {
   const taskId = req.query.taskId;
-  console.log(`[COMPRESS START] Demande de compression initiée. TaskID: ${taskId}`);
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const buffer = await getRawBody(req, taskId);
-    console.log(`[COMPRESS RAW] Fichier d'entrée récupéré. Taille: ${buffer.length} octets`);
-    if (buffer.length === 0) {
-      console.error('[COMPRESS ERROR] Échec : Aucun contenu');
-      return res.status(400).json({ error: 'Pa gen done fichye' });
-    }
-    const isVideo = req.query.type === 'video';
-    if (isVideo && buffer.length > 52428800) {
-      console.error(`[COMPRESS ERROR] Échec : Fichier vidéo trop volumineux (${buffer.length} octets)`);
-      return res.status(400).json({ error: 'Videyo sa a twò gwo' });
-    }
+    if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
     
-    let origFilename = req.query.filename || 
-                       req.headers['x-file-name'] || 
-                       req.headers['x-filename'] || 
-                       req.headers['file-name'] || 
-                       '';
+    const isVideo = req.query.type === 'video';
+    if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
+    
+    let origFilename = req.query.filename || req.headers['x-file-name'] || req.headers['x-filename'] || req.headers['file-name'] || '';
 
     if (!origFilename && req.headers['content-disposition']) {
       const cd = req.headers['content-disposition'];
@@ -936,8 +620,6 @@ app.post('/compress', requireAuth, async (req, res) => {
         origFilename = match[1];
       }
     }
-
-    console.log(`[COMPRESS FILENAME] Nom brut reçu: "${origFilename}"`);
 
     if (origFilename) {
       try {
@@ -955,21 +637,19 @@ app.post('/compress', requireAuth, async (req, res) => {
     const parsed = path.parse(origFilename);
     const safeName = parsed.name || "compressed";
     let finalRequestedName = `${safeName}.${outFormat}`;
-    console.log(`[COMPRESS TARGET] Nom cible final structuré: "${finalRequestedName}"`);
     
     if (taskId) tasks.set(taskId, { step: 'telechargement' });
     const sourceExt = isVideo ? 'mp4' : 'png';
     const sourceMime = isVideo ? 'video/mp4' : 'image/png';
     let sourceUploadName = origFilename || sourceExt;
-    const sourceUrlRaw = await saveEphemeral(buffer, sourceMime, sourceUploadName);
-    const sourceUrl = encodeURI(sourceUrlRaw);
-    console.log(`[COMPRESS URL] Téléversement éphémère effectué: ${sourceUrl}`);
+    
+    const sourceUrl = await uploadToBref(buffer, sourceMime, sourceUploadName);
     
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
-    let jobPayloadWithParams;
+    let jobPayload;
     if (isVideo) {
-      jobPayloadWithParams = {
+      jobPayload = {
         tasks: {
           "import-1": { operation: "import/url", url: sourceUrl },
           "task-1": { 
@@ -989,37 +669,7 @@ app.post('/compress', requireAuth, async (req, res) => {
         }
       };
     } else {
-      jobPayloadWithParams = {
-        tasks: {
-          "import-1": { operation: "import/url", url: sourceUrl },
-          "task-1": { 
-            operation: "convert", 
-            input: "import-1", 
-            output_format: outFormat,
-            quality: 40
-          },
-          "export-1": { operation: "export/url", input: "task-1" }
-        }
-      };
-    }
-
-    let jobPayloadSimple;
-    if (isVideo) {
-      jobPayloadSimple = {
-        tasks: {
-          "import-1": { operation: "import/url", url: sourceUrl },
-          "task-1": { 
-            operation: "convert", 
-            input: "import-1", 
-            output_format: outFormat,
-            video_codec: "h264",
-            crf: 33
-          },
-          "export-1": { operation: "export/url", input: "task-1" }
-        }
-      };
-    } else {
-      jobPayloadSimple = {
+      jobPayload = {
         tasks: {
           "import-1": { operation: "import/url", url: sourceUrl },
           "task-1": { 
@@ -1034,120 +684,75 @@ app.post('/compress', requireAuth, async (req, res) => {
     }
 
     const validKeys = CLOUDCONVERT_KEYS.filter(k => typeof k === 'string' && k.trim().length > 0);
-    console.log(`[COMPRESS API KEYS] Clés CloudConvert actives: ${validKeys.length}`);
-    if (validKeys.length === 0) throw new Error("Aucune clé API CloudConvert valide");
+    if (validKeys.length === 0) throw new Error("Echek");
 
     let exportUrl = null;
     let jobSuccess = false;
 
     for (let keyIdx = 0; keyIdx < validKeys.length; keyIdx++) {
       const key = validKeys[keyIdx];
-      const obscuredKey = key.substring(0, 15) + '...';
-      console.log(`[COMPRESS ATTEMPT] Clé [${keyIdx + 1}/${validKeys.length}]: ${obscuredKey}`);
-      
-      const payloadsToTry = [jobPayloadWithParams, jobPayloadSimple];
-      
-      for (let pIdx = 0; pIdx < payloadsToTry.length; pIdx++) {
-        const payload = payloadsToTry[pIdx];
-        const isFallbackPayload = pIdx === 1;
-        console.log(`[COMPRESS PAYLOAD] Lancement avec profil: ${isFallbackPayload ? 'REPLI' : 'OPTIMISÉ'}`);
+      try {
+        const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${key}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(jobPayload)
+        });
         
-        try {
-          const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${key}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
+        if (!ccRes.ok) continue;
+        
+        const jobData = await ccRes.json();
+        const jobId = jobData.data.id;
+        
+        let finished = false;
+        let jobError = false;
+
+        while (!finished && !jobError) {
+          await new Promise(r => setTimeout(r, 2000));
+          const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+            headers: { "Authorization": `Bearer ${key}` }
           });
-          
-          if (!ccRes.ok) {
-            const errBody = await ccRes.text();
-            console.warn(`[COMPRESS CC WARN] Échec de l'init du job. Statut: ${ccRes.status}, Message: ${errBody}`);
-            continue;
+          if (!checkRes.ok) {
+            jobError = true;
+            break;
           }
+          const checkData = await checkRes.json();
+          const status = checkData.data.status;
           
-          const jobData = await ccRes.json();
-          const jobId = jobData.data.id;
-          console.log(`[COMPRESS CC JOB] Job créé avec succès. ID: ${jobId}`);
-          
-          let finished = false;
-          let jobError = false;
-          let fetchFailedCount = 0;
-
-          while (!finished && !jobError) {
-            await new Promise(r => setTimeout(r, 2000));
-            const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-              headers: { "Authorization": `Bearer ${key}` }
-            });
-            if (!checkRes.ok) {
-              fetchFailedCount++;
-              console.warn(`[COMPRESS CC STATUS WARN] Erreur de récupération. Statut: ${checkRes.status} (Essai ${fetchFailedCount}/3)`);
-              if (fetchFailedCount > 3) {
-                jobError = true;
-                break;
-              }
-              continue;
-            }
-            fetchFailedCount = 0;
-            const checkData = await checkRes.json();
-            const status = checkData.data.status;
-            
-            const taskProgress = checkData.data.tasks || [];
-            taskProgress.forEach(t => {
-              if (t.operation || t.status) {
-                console.log(`[COMPRESS CC STEP LOG] Tâche: ${t.operation || 'convert'}, Statut: ${t.status}, Avancement: ${t.percent || 0}%`);
-              }
-            });
-
-            if (status === 'finished') {
-              finished = true;
-              const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-              if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
-                exportUrl = exportTask.result.files[0].url;
-                jobSuccess = true;
-                console.log(`[COMPRESS CC SUCCESS] Job achevé. Fichier de sortie: ${exportUrl}`);
-              } else {
-                console.error(`[COMPRESS CC ERROR] Job fini mais aucune donnée d'exportation.`);
-                jobError = true;
-              }
-            } else if (status === 'error') {
-              const failedSubTask = checkData.data.tasks.find(t => t.status === 'failed' || t.status === 'error');
-              const failedMsg = failedSubTask ? failedSubTask.message : 'Inconnu';
-              console.error(`[COMPRESS CC FAIL DETECTED] CloudConvert a renvoyé une erreur: ${failedMsg}`);
+          if (status === 'finished') {
+            finished = true;
+            const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+            if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
+              exportUrl = exportTask.result.files[0].url;
+              jobSuccess = true;
+            } else {
               jobError = true;
             }
+          } else if (status === 'error') {
+            jobError = true;
           }
-          if (jobSuccess) break;
-        } catch (e) {
-          console.error(`[COMPRESS INTERNAL EXCEPTION] Échec critique durant l'appel:`, e);
-          continue;
         }
+        if (jobSuccess) break;
+      } catch (e) {
+        continue;
       }
-      if (jobSuccess) break;
     }
 
-    if (!jobSuccess || !exportUrl) {
-      console.error('[COMPRESS OVERALL ERROR] Toutes les clés et tous les profils ont échoué.');
-      throw new Error("Echek jeneral konpresyon");
-    }
+    if (!jobSuccess || !exportUrl) throw new Error("Echek");
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
-    console.log(`[COMPRESS DOWNLOAD] Téléchargement du fichier final compressé... URL: ${exportUrl}`);
     const dlRes = await fetch(exportUrl);
-    if (!dlRes.ok) throw new Error("Echek telechajman");
+    if (!dlRes.ok) throw new Error("Echek");
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
-    console.log(`[COMPRESS DOWNLOAD SUCCESS] Fichier fini récupéré. Taille: ${dlBuf.length} octets`);
     
     const finalMime = isVideo ? 'video/mp4' : 'image/jpeg';
-    const finalUrl = await saveEphemeral(dlBuf, finalMime, finalRequestedName);
-    console.log(`[COMPRESS FINISHED] Traitement de compression finalisé. Lien public: ${finalUrl}`);
+    const finalUrl = await uploadToBref(dlBuf, finalMime, finalRequestedName);
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
     res.json({ url: finalUrl });
   } catch (e) {
-    console.error('[COMPRESS CATCH EXCEPTION] Exception attrapée:', e);
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1194,7 +799,7 @@ app.post('/resize', requireAuth, async (req, res) => {
           if (code !== 0) throw new Error('Echek');
           const outBuf = fs.readFileSync(outImg);
           if (taskId) tasks.set(taskId, { step: 'sovgade' });
-          const url = await saveEphemeral(outBuf, 'image/png', 'png');
+          const url = await uploadToBref(outBuf, 'image/png', 'png');
           if (taskId) tasks.set(taskId, { step: 'fini', url });
           res.json({ url });
         } catch (e) {
@@ -1234,7 +839,7 @@ app.post('/resize', requireAuth, async (req, res) => {
         try {
           if (code === 0) {
             const outBuf = fs.readFileSync(outImg);
-            urls.push(await saveEphemeral(outBuf, 'image/png', 'png'));
+            urls.push(await uploadToBref(outBuf, 'image/png', 'png'));
           }
         } catch (e) {}
         try { fs.unlinkSync(outImg); } catch (e) {}
@@ -1254,7 +859,6 @@ app.post('/resize', requireAuth, async (req, res) => {
 
 app.post('/upload', requireAuth, async (req, res) => {
   const taskId = req.query.taskId;
-  console.log(`[UPLOAD START] Demande d'upload brute reçue. TaskID: ${taskId}`);
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const buffer = await getRawBody(req, taskId);
@@ -1285,12 +889,11 @@ app.post('/upload', requireAuth, async (req, res) => {
       }
     }
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
-    const url = await saveEphemeral(fileBuffer, 'application/pdf', 'pdf');
+    let filename = req.headers['x-file-name'] || 'file.dat';
+    const url = await uploadToBref(fileBuffer, ct, filename);
     if (taskId) tasks.set(taskId, { step: 'fini', url });
-    console.log(`[UPLOAD SUCCESS] Fichier enregistré via upload sous l'URL: ${url}`);
     res.json({ url });
   } catch (e) {
-    console.error('[UPLOAD ERROR] Échec upload brute:', e);
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Erè pandan telechargement an" });
   }
@@ -1383,7 +986,6 @@ app.post('/code/syntax', requireAuth, (req, res) => {
 
 app.post('/images-to-pdf', requireAuth, async (req, res) => {
   const taskId = req.query.taskId;
-  console.log(`[IMAGES-TO-PDF] Nouvelle demande de génération PDF. TaskID: ${taskId}`);
   try {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const urls = req.body.images || [];
@@ -1434,7 +1036,6 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
         
         const jobData = await ccRes.json();
         const jobId = jobData.data.id;
-        console.log(`[IMAGES-TO-PDF CC JOB] Job démarré. ID: ${jobId}`);
         
         let finished = false;
         let jobError = false;
@@ -1470,13 +1071,11 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     const dlRes = await fetch(exportUrl);
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
-    const finalUrl = await saveEphemeral(dlBuf, 'application/pdf', 'tfsip-document.pdf');
+    const finalUrl = await uploadToBref(dlBuf, 'application/pdf', 'document.pdf');
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
-    console.log(`[IMAGES-TO-PDF SUCCESS] PDF complet généré et disponible à l'adresse: ${finalUrl}`);
     res.json({ url: finalUrl });
   } catch (error) {
-    console.error('[IMAGES-TO-PDF ERROR] Échec lors de la création du document PDF:', error);
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
   }
@@ -1491,46 +1090,20 @@ app.put('/:filename', requireAuth, async (req, res) => {
     const buffer = await getRawBody(req, taskId);
     if (buffer.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn fichye' });
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
-    const randomNum = Math.floor(Math.random() * 10000000).toString();
-    const tfid = `TF-${randomNum}`;
-    const key = `${tfid}/${filename}`;
-    await s3.send(new PutObjectCommand({ Bucket: 'tout', Key: key, Body: buffer, ContentType: req.headers['content-type'] || 'application/octet-stream' }));
-    const serverUrl = `https://server.tout.adamdh7.org/${key}`;
-    if (taskId) tasks.set(taskId, { step: 'fini', url: serverUrl });
-    res.send(serverUrl);
+    
+    const url = await uploadToBref(buffer, req.headers['content-type'] || 'application/octet-stream', filename);
+    
+    if (taskId) tasks.set(taskId, { step: 'fini', url });
+    res.send(url);
   } catch (error) {
     if (taskId) tasks.set(taskId, { step: 'erè' });
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/:tfid/:filename', async (req, res, next) => {
-  const tfid = req.params.tfid;
-  const filename = req.params.filename;
-  if (!tfid.startsWith('TF-') || !/^\d+$/.test(tfid.slice(3))) return next();
-  const key = `${tfid}/${filename}`;
-  const exists = await resourceExists(key);
-  if (!exists) return sendUnknown(req, res);
-  return servePublicFile(req, res, key);
-});
-
-app.get('/:filename', async (req, res, next) => {
-  const filename = req.params.filename;
-  if (isReservedPublicName(filename)) return next();
-  const exists = await resourceExists(filename);
-  if (!exists) return next();
-  return servePublicFile(req, res, filename);
-});
-
 app.use((req, res) => { res.status(404).send('Nou pa jwenn sa w ap chèche a'); });
 
-process.on('uncaughtException', (err) => {
-  console.error('[CRITICAL UNCAUGHT EXCEPTION]', err);
-});
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[CRITICAL UNHANDLED REJECTION] Raison:', reason);
-});
+process.on('uncaughtException', (err) => {});
+process.on('unhandledRejection', (reason, promise) => {});
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[SERVER START] Tout est démarré sur le port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => {});
