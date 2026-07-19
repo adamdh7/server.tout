@@ -18,7 +18,7 @@ const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org'
 const CLOUDCONVERT_KEYS = [
   process.env.CLOUDCONVERT_API_KEY,
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYWU2YTc1NWE4OWEwODg3MTVkODhhNTZmMDM4OGE1OGNiZTY0OWJiZjZmYTViYzg3ZDkzNThkNTMwZWM3YjZmY2Q0Zjg4OTI2OWVmNDNmYWEiLCJpYXQiOjE3ODI4NDgxNDYuMTgwNzU3LCJuYmYiOjE3ODI4NDgxNDYuMTgwNzU4LCJleHAiOjQ5Mzg1MjE3NDYuMTc0OTgzLCJzdWIiOiI3NjE1ODM1NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsInByZXNldC53cml0ZSIsInByZXNldC5yZWFkIiwid2ViaG9vay53cml0ZSJdfQ.IWtqehZZt8E1mkxUii3g0CKwwHyYqcrL4rKmYbGmB6oNpjEIlKhiNjfqDKcdAjebBsinY2sqf7rMnAJ4DS9osBBYpRTZSvMbPSVvE0wWL5K9zzCthrSchhODv7yRMOhmZkwoPqqcg3X8zhLtPR7em2zrhSUWJYfMy7T8GwXDPWjhZ7UsU4dsFZttbxbVXp2HbUUqmKtHpW1QvlXsh9iwAUSuYZWRKKRfzMU5_m80lerl1OGWY-rxttDCBROAzpp93RflkPdgy_EW0msCEkC0Agkvl6Y9iFLge1VCYevjvuz6Tg_M1EU-4WieJJUA8SlVefxOE_6enbpY3KFV32tucUCvE3MIusBtSsyafdgcxtPCM06pOhmK53Ne4K-7EDA9eBHQAVIcprMoabiQH2gct_dZOb58pDtoItPKrNTFBzs1lWZpPZfMN7oVzlfeTnZnO-srbmLQg7tNRdDjx2an4VO_BQtuZbiysO8E99YBx2GlDsCulkt2yS6vjUhkW9SQQPS7i-X3b9QmpcmOXsaz71g9yON6WWEElqIyu9Zu0rGnJM1VBy6oYr-L_ZXlhKDLf_0SpCuyjq9IZ_k-ONL0jCYOWEi9MQVEnEW-wR7FmHtivNcf7vTWYnksjYSSue939W7nKboo_mwYVyRfINmibxLb6Ha1y9BHu9vsS-AR4jM',
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYjU5MWZiYTU5MzgzY2I0ZWI4NTJlYWEzNGMyOTAzNjVmMzdkMGEzYzllNjM4NjIwYzAzMDI0MmUyNmFhZTJlYTU2NzNkMDkyZDZlZjRhMDgiLCJpYXQiOjE3ODI4NTEwODguNzMzMjYyLCJuYmYiOjE3ODI4NTEwODguNzMzMjYzLCJleHAiOjQ5Mzg1MjQ2ODguNzI4MTQ5LCJzdWIiOiI3NjE1ODg3MiIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.NwXOyWgVrXMiJC7mk2NYUWFBy-9Dqs4UaxR2VezRWZe8Sx-QsI0HgpHhX8QsvuVa9VMr6ejg464IETha3vaCtpmwLEh2VPvzUd2FWYydQ4KSL4jO3TYBsnm0mwBaJoxmNUsXolK10O3maYqRXUCXj2sCTEe8pPKDKaL6xyUhCKj6u1VLJkQMXGeJVWxf624CPtiGiZ2_ihfRZIIckhVDMgzfy3kHqHwG-ElOTJ76_mF--P_tCsJHJ3C3S4BRo0xQlLzeWa-znI_Uy6PhbD8fEDTYFWm-eUPtVYxaMrc9_pcqPu7XIMpYkb8jI-pXNTFyyUspAIBs2Q1lJjyO_cnoGgjwjWKUPXkgkn7cyFS9ixV_GcYZtV6OV1jSPT0zgs-RQMBPdPK53dDSBFaZkd51NXzNu12ryPF9Bd5Uzib0Dh96IUtFY0xCWVqkVfe9nGrYHJMZygXz_ILZhf13YIgzIevs1iyaVh8ymIfk9P2-DnBuldAeHKFoPv_UCdFtfa2sFtB1NM6zMGvMtNUboJdgodYtemVsBuQ-P80ERWq3CDUI5rk9rcV1Rbg7mxvx56QUA8GQM8c1PjPq07muuqIVoj6cMyAFcK_rTpHV0_x36m_KAATOf8xwod_4VwKarLdjSE3vV1nHLSS83T0Cyv7zIdeAU1pyoQoeEf7bQY16q1U',
+  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYjU5MWZiYTU5MzgzY2I0ZWI4NTJlYWEzNGMyOTAzNjVmMzdkMGEzYzllNjM4NjIwYzAzMDI0MmUyNmFhZTJlYTU2NzNkMDkyZDZlZjRhMDgiLCJpYXQiOjE3ODI4NTEwODguNzMzMjYyLCJuYmYiOjE3ODI4NTEwODguNzMzMjYzLCJleHAiOjQ5Mzg1MjQ2ODguNzI4MTQ5LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.NwXOyWgVrXMiJC7mk2NYUWFBy-9Dqs4UaxR2VezRWZe8Sx-QsI0HgpHhX8QsvuVa9VMr6ejg464IETha3vaCtpmwLEh2VPvzUd2FWYydQ4KSL4jO3TYBsnm0mwBaJoxmNUsXolK10O3maYqRXUCXj2sCTEe8pPKDKaL6xyUhCKj6u1VLJkQMXGeJVWxf624CPtiGiZ2_ihfRZIIckhVDMgzfy3kHqHwG-ElOTJ76_mF--P_tCsJHJ3C3S4BRo0xQlLzeWa-znI_Uy6PhbD8fEDTYFWm-eUPtVYxaMrc9_pcqPu7XIMpYkb8jI-pXNTFyyUspAIBs2Q1lJjyO_cnoGgjwjWKUPXkgkn7cyFS9ixV_GcYZtV6OV1jSPT0zgs-RQMBPdPK53dDSBFaZkd51NXzNu12ryPF9Bd5Uzib0Dh96IUtFY0xCWVqkVfe9nGrYHJMZygXz_ILZhf13YIgzIevs1iyaVh8ymIfk9P2-DnBuldAeHKFoPv_UCdFtfa2sFtB1NM6zMGvMtNUboJdgodYtemVsBuQ-P80ERWq3CDUI5rk9rcV1Rbg7mxvx56QUA8GQM8c1PjPq07muuqIVoj6cMyAFcK_rTpHV0_x36m_KAATOf8xwod_4VwKarLdjSE3vV1nHLSS83T0Cyv7zIdeAU1pyoQoeEf7bQY16q1U',
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNWU4YTUwZTVmODczNWI3Y2RiMTczOTcyYTlmODFiMmQ4NGY5YzU4NmVmOGU4MWNiOTkwNWNjYWQ4ZGI0YWFmNTA0YjA5ZjkwZWNiMjg0N2UiLCJpYXQiOjE3ODI4NTExNTUuMzE5ODY1LCJuYmYiOjE3ODI4NTExNTUuMzE5ODY2LCJleHAiOjQ5Mzg1MjQ3NTUuMzE1NTQ2LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.J9UI0QSs4nFVlyfIXEBal71tvFL4Sd8P-oVlvtQKsy1z-8AB_E6MpKQVEOP39MBogTaawJVyrJTu4BYq2tYBYWuH5AsHXSF6vhNO2gwafvL0yoPXmV6jbAHT9gb0u9rn6K1qskPaqf-Aqr278uQqzDqAEk-Ws1hnbhAPr-4RFjd0pXWfFNn8Vy-lPtgJzXcYbE7i-zpf6g1Vu5YUbFhtkwDOmG97POhqSD9oqb284iX_iQMwlwLPA2A-bcRzmBuUrU1WgeFdYNubr-4pDH8b-p0Lx532CFcYNo9w2yeDmdmSaQyoykA-kyW5pffV6k5TRTvOyklNPqzWfJ4MILOK8iqBNbhpwsn9SFLrEuy6vsfGop0YBnnjnmlQ6SQsfiVhBje8_FcqHADOyTZrSWRtzsWpHx4Nkv1QosUMbHKAQ59zEORz2yim_CKkZkH6tcE8vcrG4TosEFDd6zE7UFeE-36YSLRZvQ8YMgxSKQ2UdYuaY0TgMZUM-Eg3UMUprRMUjMa8YuX49DteBm4YNP9oyKjpyqLAKnl8_M3ibUWnV0iV9zpe9qsZWbE8VEJ37lI90fhP-pLwQX-RV2bkS5J8dGqmYgmU4afzc4RJiiV85YTBOA28BaGoPobDB_mPSliJsZeEdNn8HtSt10cglcU9PasWJF3MdCnmKNzZuh4d6o4'
 ].filter(k => typeof k === 'string' && k.trim().length > 0);
 
@@ -517,6 +517,30 @@ app.get('/ai', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/ai/clear', requireAuth, async (req, res) => {
+  try {
+    const sess = req.body.session_id || 'global';
+    const database = await getDb();
+    const messagesCollection = database.collection('messages');
+    const attachmentsCollection = database.collection('attachments');
+    
+    const msgs = await messagesCollection.find({ session_id: sess }).toArray();
+    const msgIds = msgs.map(m => m.id);
+    
+    if (msgIds.length > 0) {
+      await attachmentsCollection.deleteMany({ message_id: { $in: msgIds } });
+      await messagesCollection.deleteMany({ session_id: sess });
+    }
+    res.json({ success: true, message: 'Tout mesaj yo efase avèk siksè.' });
+  } catch (e) {
+    res.status(500).json({ error: 'Erè pandan efase mesaj yo' });
+  }
+});
+
+app.post('/calcul/clear', requireAuth, async (req, res) => {
+  res.json({ success: true, message: 'Done kalkil yo efase.' });
+});
+
 app.post('/ai', requireAuth, async (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream',
@@ -566,7 +590,20 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. If the user asks for an image or it improves your explanation, output EXACTLY [IMAGE: english description]. Do not guess.";
+    let imageIndex = 0;
+    let searchImageIndex = 0;
+
+    for (const key of contextAttMap.keys()) {
+      if (key.startsWith('[IMAGES: SEARCH_')) {
+        const num = parseInt(key.replace('[IMAGES: SEARCH_', '').replace(']', ''));
+        if (!isNaN(num) && num > searchImageIndex) searchImageIndex = num;
+      } else if (key.startsWith('[IMAGES: ')) {
+        const num = parseInt(key.replace('[IMAGES: ', '').replace(']', ''));
+        if (!isNaN(num) && num > imageIndex) imageIndex = num;
+      }
+    }
+
+    const systemPrompt = "You are Asistan. You HAVE the capability to search the web and generate images. If unsure, lacking info, or needing current data, output EXACTLY [SEARCH: query]. To generate an image, output EXACTLY [IMAGE: english description] (example: [IMAGE: a beautiful sunset]). You can then refer to it using [IMAGES: X] where X is the image number. Do not guess.";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
@@ -577,8 +614,6 @@ app.post('/ai', requireAuth, async (req, res) => {
     let frontendMessage = '';
     let dbMessage = '';
     let attachmentsToSave = [];
-    let imageIndex = 0;
-    let searchImageIndex = 0;
     let allImages = [];
     let isBuffering = false;
     let buffer = '';
@@ -622,16 +657,70 @@ app.post('/ai', requireAuth, async (req, res) => {
         const finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results. Respond strictly to the user's request without adding unrequested elements.\n\nResults:\n" + searchResultsText;
         const contextLimit = context.slice(-6);
 
+        if (dbMessage.trim()) {
+          contextLimit.push({ role: 'assistant', content: dbMessage });
+        }
+
         try {
           const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true })
           });
+          
           if (!aiFinalRaw.ok) {
             sendToClient("Sistèm sa a pa disponib kounye a.");
             return;
           }
+
+          let isThink = false;
+          let finalMatchBuffer = "";
+          
+          async function processFinalChar(char) {
+            if (!char) return;
+            if (!isThink) {
+              if (char === '<') {
+                if (finalMatchBuffer) {
+                  res.write(JSON.stringify({ type: 'final', content: finalMatchBuffer }) + '\n');
+                  frontendMessage += finalMatchBuffer;
+                  dbMessage += finalMatchBuffer;
+                }
+                finalMatchBuffer = '<';
+              } else {
+                finalMatchBuffer += char;
+                if ("<think>".startsWith(finalMatchBuffer)) {
+                  if (finalMatchBuffer === "<think>") {
+                    isThink = true;
+                    finalMatchBuffer = "";
+                  }
+                } else {
+                  res.write(JSON.stringify({ type: 'final', content: finalMatchBuffer }) + '\n');
+                  frontendMessage += finalMatchBuffer;
+                  dbMessage += finalMatchBuffer;
+                  finalMatchBuffer = "";
+                }
+              }
+            } else {
+              if (char === '<') {
+                if (finalMatchBuffer) {
+                  res.write(JSON.stringify({ type: 'think', content: finalMatchBuffer }) + '\n');
+                }
+                finalMatchBuffer = '<';
+              } else {
+                finalMatchBuffer += char;
+                if ("</think>".startsWith(finalMatchBuffer)) {
+                  if (finalMatchBuffer === "</think>") {
+                    isThink = false;
+                    finalMatchBuffer = "";
+                  }
+                } else {
+                  res.write(JSON.stringify({ type: 'think', content: finalMatchBuffer }) + '\n');
+                  finalMatchBuffer = "";
+                }
+              }
+            }
+          }
+
           const aiFinalStream = aiFinalRaw.body;
           if (aiFinalStream && aiFinalStream.getReader) {
             const readerFinal = aiFinalStream.getReader();
@@ -651,13 +740,25 @@ app.post('/ai', requireAuth, async (req, res) => {
                     const dataFinal = JSON.parse(dataStr);
                     if (dataFinal.response !== undefined && dataFinal.response !== null) {
                       const strChunk = String(dataFinal.response);
-                      for (const c of strChunk) await processChar(c);
+                      for (const c of strChunk) await processFinalChar(c);
                     }
                   } catch (e) {}
                 }
               }
             }
           }
+
+          if (finalMatchBuffer) {
+            if (isThink) {
+              res.write(JSON.stringify({ type: 'think', content: finalMatchBuffer }) + '\n');
+            } else {
+              res.write(JSON.stringify({ type: 'final', content: finalMatchBuffer }) + '\n');
+              frontendMessage += finalMatchBuffer;
+              dbMessage += finalMatchBuffer;
+            }
+            finalMatchBuffer = "";
+          }
+
         } catch (e) {}
       } else if (tRefMatch) {
         const rawTag = tag.trim().toUpperCase();
@@ -693,15 +794,15 @@ app.post('/ai', requireAuth, async (req, res) => {
           isBuffering = false;
           await handleTag(buffer);
           buffer = '';
-        } else if (buffer.length > 200) {
+        } else if (buffer.length > 500) {
           isBuffering = false;
           sendToClient(buffer);
           buffer = '';
         } else {
-          const uBuf = buffer.toUpperCase();
-          const isMatch = "[IMAGE:".startsWith(uBuf) || uBuf.startsWith("[IMAGE:") ||
-                          "[SEARCH:".startsWith(uBuf) || uBuf.startsWith("[SEARCH:") ||
-                          "[IMAGES:".startsWith(uBuf) || uBuf.startsWith("[IMAGES:");
+          const cleanBuf = buffer.replace(/\s+/g, '').toUpperCase();
+          const isMatch = "[IMAGE:".startsWith(cleanBuf) || cleanBuf.startsWith("[IMAGE:") ||
+                          "[SEARCH:".startsWith(cleanBuf) || cleanBuf.startsWith("[SEARCH:") ||
+                          "[IMAGES:".startsWith(cleanBuf) || cleanBuf.startsWith("[IMAGES:");
           if (!isMatch) {
             isBuffering = false;
             sendToClient(buffer);
@@ -997,7 +1098,7 @@ app.post('/compress', requireAuth, async (req, res) => {
     }
 
     const validKeys = CLOUDCONVERT_KEYS;
-    if (validKeys.length === 0) throw new Error("Aucune clé API CloudConvert valide");
+    if (validKeys.length === 0) throw new Error("Echek");
 
     let exportUrl = null;
     let jobSuccess = false;
@@ -1069,12 +1170,12 @@ app.post('/compress', requireAuth, async (req, res) => {
     }
 
     if (!jobSuccess || !exportUrl) {
-      throw new Error("Echek jeneral konpresyon");
+      throw new Error("Echek");
     }
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const dlRes = await fetch(exportUrl);
-    if (!dlRes.ok) throw new Error("Echek telechajman");
+    if (!dlRes.ok) throw new Error("Echek");
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
     const finalUrl = await uploadToBref(dlBuf, finalRequestedName);
