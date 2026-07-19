@@ -437,21 +437,22 @@ async function performSearch(query) {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true })
+      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true, include_answer: true })
     });
     const data = await res.json();
     let text = '';
     let foundImages = [];
     let foundLinks = [];
     if (data.images && data.images.length > 0) foundImages = data.images;
-    if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
+    if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [], answer: '' };
     for (const r of data.results) {
       text += 'URL: ' + (r.url || 'Lyen pa disponib') + '\nContenu: ' + r.content + '\n\n';
       if (r.url) foundLinks.push(r.url);
     }
-    return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
+    const aiAnswer = data.answer || (data.results.length > 0 ? data.results[0].content : '');
+    return { context: text.substring(0, 4000), images: foundImages, links: foundLinks, answer: aiAnswer };
   } catch (e) {
-    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [] };
+    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [], answer: '' };
   }
 }
 
@@ -570,6 +571,13 @@ app.post('/ai', requireAuth, async (req, res) => {
   const streamState = { abortController: new AbortController(), frontendMessage: '', dbMessage: '' };
   activeStreams.set(sess, streamState);
   const signal = streamState.abortController.signal;
+  let isFinished = false;
+
+  req.on('close', () => {
+    if (!isFinished && !signal.aborted) {
+      try { streamState.abortController.abort(); } catch(e) {}
+    }
+  });
 
   try {
     const database = await getDb();
@@ -578,6 +586,12 @@ app.post('/ai', requireAuth, async (req, res) => {
     const userMsgId = Date.now().toString() + Math.random().toString();
     await messagesCollection.insertOne({
       id: userMsgId, role: 'user', content: userMessage, session_id: sess, timestamp: new Date().toISOString()
+    });
+
+    signal.addEventListener('abort', async () => {
+      try {
+        await messagesCollection.deleteOne({ id: userMsgId });
+      } catch (e) {}
     });
 
     const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(30).toArray();
@@ -653,14 +667,16 @@ app.post('/ai', requireAuth, async (req, res) => {
         sendToClientFinal(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         const query = tSrcMatch[1].trim();
-        sendToClientThink(`M'ap chèche enfòmasyon sou: "${query}"...\n`);
+        sendToClientThink(`${query}\n`);
         
         const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
         
-        sendToClientThink(`Rechèch la fini. M'ap analize rezilta yo pou ou...\n`);
+        if (searchRes.answer) {
+          sendToClientThink(`${searchRes.answer}\n\n`);
+        }
         
         let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
         if (searchRes.images && searchRes.images.length > 0) {
@@ -867,7 +883,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
 
     try {
-      if (streamState.dbMessage.trim() !== '') {
+      if (streamState.dbMessage.trim() !== '' && !signal.aborted) {
         const asstMsgId = Date.now().toString() + Math.random().toString();
         await messagesCollection.insertOne({
           id: asstMsgId, role: 'assistant', content: streamState.dbMessage, session_id: sess, timestamp: new Date().toISOString()
@@ -881,6 +897,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     } catch (e) {}
     
+    isFinished = true;
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
