@@ -11,6 +11,7 @@ const app = express();
 app.set('trust proxy', true);
 
 const PORT = process.env.PORT || 3000;
+const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
 
 const CLOUDCONVERT_KEYS = [
@@ -58,15 +59,34 @@ const getRawBody = (req, taskId) => new Promise((resolve, reject) => {
   req.on('error', reject);
 });
 
-async function uploadToBref(buffer, contentType, filename) {
-  const formData = new FormData();
-  const blob = new Blob([buffer], { type: contentType || 'application/octet-stream' });
-  formData.append('file', blob, filename || 'file.dat');
+async function uploadToBref(buffer, mimeType, filenameExt) {
+  const boundary = '----BrefUploadBoundary' + Date.now().toString(16);
+  let filename = filenameExt;
+  if (!filename.includes('.')) {
+    filename = `file_${Date.now()}.${filenameExt}`;
+  }
+  const head = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`;
+  const tail = `\r\n--${boundary}--\r\n`;
+
+  const body = Buffer.concat([
+    Buffer.from(head, 'utf8'),
+    buffer,
+    Buffer.from(tail, 'utf8')
+  ]);
+
   const res = await fetch('https://bref.adamdh7.org/upload', {
     method: 'POST',
-    body: formData
+    headers: {
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': body.length.toString()
+    },
+    body: body
   });
-  if (!res.ok) throw new Error('Echek upload');
+
+  if (!res.ok) {
+    throw new Error('Echek sou Bref');
+  }
+
   const data = await res.json();
   return data.url;
 }
@@ -136,7 +156,6 @@ app.use(corsAndOptions);
 
 async function processAndUploadImage(prompt) {
   try {
-    await new Promise(resolve => setTimeout(resolve, 7));
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
@@ -144,11 +163,10 @@ async function processAndUploadImage(prompt) {
     });
     if (!aiRaw.ok) return '';
     const aiResponse = await aiRaw.json();
-    await new Promise(resolve => setTimeout(resolve, 7));
     if (!aiResponse || !aiResponse.result || !aiResponse.result.image) return '';
     const binaryString = atob(aiResponse.result.image);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    return await uploadToBref(bytes, 'image/png', `gen-${Date.now()}.png`);
+    return await uploadToBref(Buffer.from(bytes), 'image/png', 'png');
   } catch (e) {
     return '';
   }
@@ -156,13 +174,11 @@ async function processAndUploadImage(prompt) {
 
 async function performSearch(query) {
   try {
-    await new Promise(resolve => setTimeout(resolve, 7));
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true })
     });
-    await new Promise(resolve => setTimeout(resolve, 7));
     const data = await res.json();
     let text = '';
     let foundImages = [];
@@ -170,12 +186,12 @@ async function performSearch(query) {
     if (data.images && data.images.length > 0) foundImages = data.images;
     if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
     for (const r of data.results) {
-      text += 'URL: ' + (r.url || 'Lyen pa disponib') + '\nContenu: ' + r.content + '\n\n';
+      text += 'URL: ' + (r.url || '') + '\nInfo: ' + r.content + '\n\n';
       if (r.url) foundLinks.push(r.url);
     }
     return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
   } catch (e) {
-    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [] };
+    return { context: 'Erè rechèch.', images: [], links: [] };
   }
 }
 
@@ -192,7 +208,7 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/Tout.png', (req, res) => {
-  res.redirect('https://adamdh7.org/adamdh7.png');
+  res.redirect(ICON_URL);
 });
 
 app.get('/ai', requireAuth, async (req, res) => {
@@ -202,7 +218,6 @@ app.get('/ai', requireAuth, async (req, res) => {
     const messagesCollection = database.collection('messages');
     const attachmentsCollection = database.collection('attachments');
     const messages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: 1 }).toArray();
-    await new Promise(resolve => setTimeout(resolve, 7));
     const messageIds = messages.map(m => m.id);
     const attachments = await attachmentsCollection.find({ message_id: { $in: messageIds } }).toArray();
     const messagesMap = new Map();
@@ -248,10 +263,8 @@ app.post('/ai', requireAuth, async (req, res) => {
     await messagesCollection.insertOne({
       id: userMsgId, role: 'user', content: userMessage, session_id: sess, timestamp: new Date().toISOString()
     });
-    await new Promise(resolve => setTimeout(resolve, 7));
 
     const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(30).toArray();
-    await new Promise(resolve => setTimeout(resolve, 7));
     
     let totalLength = 0;
     const validContext = [];
@@ -274,7 +287,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "Tu es Asistan, un assistant IA intelligent. Utilise le tag [IMAGE: description en anglais] pour générer des images, et [SEARCH: requête] pour faire des recherches si nécessaire. Réponds naturellement et de manière concise dans la langue de l'utilisateur.";
+    const systemPrompt = "Tu es Asistan, une IA experte et concise. Ne fais pas de longues phrases inutiles. Pour chercher sur internet, ecris EXACTEMENT [SEARCH: ta requete]. Pour generer une image, ecris EXACTEMENT [IMAGE: description en anglais].";
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
       method: 'POST',
@@ -292,7 +305,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     let buffer = '';
 
     function sendToClient(str) {
-      if (!str) return;
+      if (str === undefined || str === null || str === '') return;
       res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
       frontendMessage += str;
       dbMessage += str;
@@ -306,7 +319,6 @@ app.post('/ai', requireAuth, async (req, res) => {
       if (tImgMatch) {
         const prompt = tImgMatch[1].trim();
         imageIndex++;
-        await new Promise(resolve => setTimeout(resolve, 7));
         const keepAliveImg = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
         const imgUrl = await processAndUploadImage(prompt);
         clearInterval(keepAliveImg);
@@ -315,11 +327,10 @@ app.post('/ai', requireAuth, async (req, res) => {
         sendToClient(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         const query = tSrcMatch[1].trim();
-        await new Promise(resolve => setTimeout(resolve, 7));
         const keepAliveSrc = setInterval(() => { try { res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
-        let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
+        let searchResultsText = 'Requete:\n' + query + '\nResultats:\n' + searchRes.context + '\n\n';
         if (searchRes.images && searchRes.images.length > 0) {
           allImages = allImages.concat(searchRes.images);
           searchResultsText += 'Images URLs:\n' + searchRes.images.join('\n') + '\n\n';
@@ -329,7 +340,7 @@ app.post('/ai', requireAuth, async (req, res) => {
             attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
           });
         }
-        const finalSystemPrompt = "Tu es Asistan. Voici les résultats de la recherche :\n" + searchResultsText + "\nRéponds à la question de l'utilisateur naturellement à partir de ces informations.";
+        const finalSystemPrompt = "Tu es Asistan. Reponds de maniere concise et naturelle en utilisant UNIQUEMENT ces resultats de recherche.\n\nResultats:\n" + searchResultsText;
         const contextLimit = context.slice(-6);
 
         try {
@@ -351,27 +362,20 @@ app.post('/ai', requireAuth, async (req, res) => {
               const { done, value } = await readerFinal.read();
               if (done) break;
               bufferFinal += decoderFinal.decode(value, { stream: true });
-              const linesFinal = bufferFinal.split(/\r?\n/);
-              bufferFinal = linesFinal.pop() || '';
-              for (let lineFinal of linesFinal) {
-                lineFinal = lineFinal.trim();
-                if (!lineFinal || lineFinal.startsWith(':') || lineFinal === 'data: [DONE]') continue;
-                if (lineFinal.startsWith('data:')) {
+              const linesFinal = bufferFinal.split('\n');
+              bufferFinal = linesFinal.pop();
+              for (const lineFinal of linesFinal) {
+                const cleanLineFinal = lineFinal.trim();
+                if (cleanLineFinal.startsWith('data: ') && cleanLineFinal !== 'data: [DONE]') {
                   try {
-                    const dataFinal = JSON.parse(lineFinal.substring(5).trim());
-                    let chunkStrFinal = "";
-                    if (dataFinal.response !== undefined) {
-                      chunkStrFinal = String(dataFinal.response);
-                    } else if (dataFinal.choices && dataFinal.choices[0] && dataFinal.choices[0].delta && dataFinal.choices[0].delta.content !== undefined) {
-                      chunkStrFinal = String(dataFinal.choices[0].delta.content);
-                    }
-                    if (chunkStrFinal) {
-                      for (const c of chunkStrFinal) await processChar(c);
-                    }
+                    const dataFinal = JSON.parse(cleanLineFinal.slice(6));
+                    let textChunkF = "";
+                    if (dataFinal.response !== undefined) textChunkF = String(dataFinal.response);
+                    else if (dataFinal.choices && dataFinal.choices[0] && dataFinal.choices[0].delta && dataFinal.choices[0].delta.content !== undefined) textChunkF = String(dataFinal.choices[0].delta.content);
+                    for (const c of textChunkF) await processChar(c);
                   } catch (e) {}
                 }
               }
-              await new Promise(resolve => setTimeout(resolve, 7));
             }
           }
         } catch (e) {}
@@ -395,7 +399,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
 
     async function processChar(char) {
-      if (!char) return;
+      if (char === undefined || char === null || char === '') return;
       if (!isBuffering) {
         if (char === '[') {
           isBuffering = true;
@@ -437,30 +441,23 @@ app.post('/ai', requireAuth, async (req, res) => {
             const { done, value } = await reader.read();
             if (done) break;
             bufferMain += decoder.decode(value, { stream: true });
-            const lines = bufferMain.split(/\r?\n/);
-            bufferMain = lines.pop() || '';
-            for (let line of lines) {
-              line = line.trim();
-              if (!line || line.startsWith(':') || line === 'data: [DONE]') continue;
-              if (line.startsWith('data:')) {
+            const lines = bufferMain.split('\n');
+            bufferMain = lines.pop();
+            for (const line of lines) {
+              const cleanLine = line.trim();
+              if (cleanLine.startsWith('data: ') && cleanLine !== 'data: [DONE]') {
                 try {
-                  const data = JSON.parse(line.substring(5).trim());
-                  let chunkStr = "";
-                  if (data.response !== undefined) {
-                    chunkStr = String(data.response);
-                  } else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content !== undefined) {
-                    chunkStr = String(data.choices[0].delta.content);
-                  }
-                  if (chunkStr) {
-                    for (const char of chunkStr) await processChar(char);
-                  }
+                  const data = JSON.parse(cleanLine.slice(6));
+                  let textChunk = "";
+                  if (data.response !== undefined) textChunk = String(data.response);
+                  else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content !== undefined) textChunk = String(data.choices[0].delta.content);
+                  for (const char of textChunk) await processChar(char);
                 } catch (e) {}
               }
             }
-            await new Promise(resolve => setTimeout(resolve, 7));
           }
         } catch (e) {
-          const errMsg = "Gen yon erè ki fèt nan kouran an (stream).";
+          const errMsg = "Gen yon erè ki fèt nan kouran an.";
           for (const char of errMsg) await processChar(char);
         }
       } else {
@@ -478,12 +475,10 @@ app.post('/ai', requireAuth, async (req, res) => {
       await messagesCollection.insertOne({
         id: asstMsgId, role: 'assistant', content: dbMessage, session_id: sess, timestamp: new Date().toISOString()
       });
-      await new Promise(resolve => setTimeout(resolve, 7));
 
       if (attachmentsToSave.length > 0) {
         for (const att of attachmentsToSave) {
           await attachmentsCollection.insertOne({ message_id: asstMsgId, placeholder: att.placeholder, url: att.url });
-          await new Promise(resolve => setTimeout(resolve, 7));
         }
       }
     } catch (e) {}
@@ -506,11 +501,10 @@ app.post('/jerere', requireAuth, async (req, res) => {
     });
     if (!aiRaw.ok) return res.status(503).json({ error: "Sistèm sa a pa disponib kounye a." });
     const aiResponse = await aiRaw.json();
-    await new Promise(resolve => setTimeout(resolve, 7));
-    if (!aiResponse || !aiResponse.result || !aiResponse.result.image) throw new Error("Echek");
+    if (!aiResponse || !aiResponse.result || !aiResponse.result.image) throw new Error("Erè jenerasyon.");
     const binaryString = atob(aiResponse.result.image);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    const url = await uploadToBref(bytes, 'image/png', `gen-${Date.now()}.png`);
+    const url = await uploadToBref(Buffer.from(bytes), 'image/png', 'png');
     res.json({ url });
   } catch (error) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
@@ -535,9 +529,9 @@ app.post('/calcul', requireAuth, async (req, res) => {
   let body;
   try { body = req.body; } catch (e) { return res.status(400).json({ error: 'Fòma JSON pa valab' }); }
   const calculation = body.calculation?.trim();
-  if (!calculation) return res.status(400).json({ error: 'Ou pa bay okenn ekspresyon matematik' });
+  if (!calculation) return res.status(400).json({ error: 'Ou pa bay okenn ekspresyon' });
   try {
-    const systemPrompt = "Tu es un expert en sciences et mathématiques. Résous l'expression étape par étape clairement dans la langue de l'utilisateur.";
+    const systemPrompt = "Tu es Asistan, expert en mathematiques. Donne le resultat et explique les etapes de calcul clairement et brievement.";
     const userPrompt = `"${calculation}"`;
 
     const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
@@ -561,25 +555,20 @@ app.post('/calcul', requireAuth, async (req, res) => {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/);
+      const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-      for (let line of lines) {
-        line = line.trim();
-        if (!line || line.startsWith(':') || line === 'data: [DONE]') continue;
-        if (line.startsWith('data:')) {
+      for (const line of lines) {
+        const cleanLine = line.trim();
+        if (cleanLine.startsWith('data: ') && cleanLine !== 'data: [DONE]') {
           try {
-            const data = JSON.parse(line.substring(5).trim());
-            let chunkStr = "";
-            if (data.response !== undefined) {
-              chunkStr = String(data.response);
-            } else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content !== undefined) {
-              chunkStr = String(data.choices[0].delta.content);
-            }
-            if (chunkStr) res.write(chunkStr);
+            const data = JSON.parse(cleanLine.slice(6));
+            let textChunk = "";
+            if (data.response !== undefined) textChunk = String(data.response);
+            else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content !== undefined) textChunk = String(data.choices[0].delta.content);
+            if (textChunk) res.write(textChunk);
           } catch (e) {}
         }
       }
-      await new Promise(resolve => setTimeout(resolve, 7));
     }
     res.end();
   } catch (e) {
@@ -594,7 +583,7 @@ app.post('/qrcode', requireAuth, async (req, res) => {
     if (!text) return res.status(400).json({ error: 'Ou pa bay okenn tèks' });
     const fetchRes = await fetch(`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${encodeURIComponent(text)}`);
     const arrayBuf = await fetchRes.arrayBuffer();
-    const url = await uploadToBref(Buffer.from(arrayBuf), 'image/png', `qr-${Date.now()}.png`);
+    const url = await uploadToBref(Buffer.from(arrayBuf), 'image/png', 'png');
     res.json({ url });
   } catch (e) {
     res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
@@ -607,28 +596,19 @@ app.post('/compress', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'kòmanse' });
     const buffer = await getRawBody(req, taskId);
     if (buffer.length === 0) return res.status(400).json({ error: 'Pa gen done fichye' });
-    
     const isVideo = req.query.type === 'video';
     if (isVideo && buffer.length > 52428800) return res.status(400).json({ error: 'Videyo sa a twò gwo' });
     
     let origFilename = req.query.filename || req.headers['x-file-name'] || req.headers['x-filename'] || req.headers['file-name'] || '';
-
     if (!origFilename && req.headers['content-disposition']) {
       const cd = req.headers['content-disposition'];
       const match = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';\r\n]+)["']?/i);
-      if (match) {
-        origFilename = match[1];
-      }
+      if (match) origFilename = match[1];
     }
-
     if (origFilename) {
-      try {
-         origFilename = decodeURIComponent(origFilename.replace(/\+/g, '%20'));
-      } catch(e) {}
+      try { origFilename = decodeURIComponent(origFilename.replace(/\+/g, '%20')); } catch(e) {}
       origFilename = origFilename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      if (!origFilename.replace(/_/g, '').trim()) {
-        origFilename = `file_${Date.now()}.${isVideo ? 'mp4' : 'png'}`;
-      }
+      if (!origFilename.replace(/_/g, '').trim()) origFilename = `file_${Date.now()}.${isVideo ? 'mp4' : 'png'}`;
     } else {
       origFilename = `file_${Date.now()}.${isVideo ? 'mp4' : 'png'}`;
     }
@@ -641,110 +621,64 @@ app.post('/compress', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'telechargement' });
     const sourceExt = isVideo ? 'mp4' : 'png';
     const sourceMime = isVideo ? 'video/mp4' : 'image/png';
-    let sourceUploadName = origFilename || sourceExt;
-    
-    const sourceUrl = await uploadToBref(buffer, sourceMime, sourceUploadName);
+    const sourceUploadName = origFilename || sourceExt;
+    const sourceUrl = encodeURI(await uploadToBref(buffer, sourceMime, sourceUploadName));
     
     if (taskId) tasks.set(taskId, { step: 'konpresyon' });
     
-    let jobPayload;
-    if (isVideo) {
-      jobPayload = {
-        tasks: {
-          "import-1": { operation: "import/url", url: sourceUrl },
-          "task-1": { 
-            operation: "convert", 
-            input: "import-1", 
-            output_format: outFormat,
-            video_codec: "h264",
-            crf: 30,
-            preset: "medium",
-            audio_codec: "aac",
-            audio_bitrate: "64k",
-            width: 1280,
-            height: 720,
-            fit: "max"
-          },
-          "export-1": { operation: "export/url", input: "task-1" }
-        }
-      };
-    } else {
-      jobPayload = {
-        tasks: {
-          "import-1": { operation: "import/url", url: sourceUrl },
-          "task-1": { 
-            operation: "convert", 
-            input: "import-1", 
-            output_format: outFormat,
-            quality: 50
-          },
-          "export-1": { operation: "export/url", input: "task-1" }
-        }
-      };
-    }
+    let jobPayload = {
+      tasks: {
+        "import-1": { operation: "import/url", url: sourceUrl },
+        "task-1": { 
+          operation: "convert", 
+          input: "import-1", 
+          output_format: outFormat,
+          ...(isVideo ? { video_codec: "h264", crf: 30, preset: "medium", audio_codec: "aac", audio_bitrate: "64k", width: 1280, height: 720, fit: "max" } : { quality: 40 })
+        },
+        "export-1": { operation: "export/url", input: "task-1" }
+      }
+    };
 
     const validKeys = CLOUDCONVERT_KEYS.filter(k => typeof k === 'string' && k.trim().length > 0);
-    if (validKeys.length === 0) throw new Error("Echek");
+    if (validKeys.length === 0) throw new Error("Aucune clé API CloudConvert valide");
 
     let exportUrl = null;
     let jobSuccess = false;
+    const key = validKeys[0]; 
 
-    for (let keyIdx = 0; keyIdx < validKeys.length; keyIdx++) {
-      const key = validKeys[keyIdx];
-      try {
-        const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${key}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(jobPayload)
-        });
-        
-        if (!ccRes.ok) continue;
-        
-        const jobData = await ccRes.json();
-        const jobId = jobData.data.id;
-        
-        let finished = false;
-        let jobError = false;
-
-        while (!finished && !jobError) {
-          await new Promise(r => setTimeout(r, 2000));
-          const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-            headers: { "Authorization": `Bearer ${key}` }
-          });
-          if (!checkRes.ok) {
-            jobError = true;
-            break;
-          }
-          const checkData = await checkRes.json();
-          const status = checkData.data.status;
-          
-          if (status === 'finished') {
-            finished = true;
-            const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-            if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
-              exportUrl = exportTask.result.files[0].url;
-              jobSuccess = true;
-            } else {
-              jobError = true;
-            }
-          } else if (status === 'error') {
-            jobError = true;
-          }
-        }
-        if (jobSuccess) break;
-      } catch (e) {
-        continue;
-      }
+    const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(jobPayload)
+    });
+    
+    if (!ccRes.ok) throw new Error("Echek inisyalizasyon API");
+    const jobData = await ccRes.json();
+    const jobId = jobData.data.id;
+    
+    let finished = false;
+    let jobError = false;
+    while (!finished && !jobError) {
+      await new Promise(r => setTimeout(r, 2000));
+      const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, { headers: { "Authorization": `Bearer ${key}` } });
+      if (!checkRes.ok) { jobError = true; break; }
+      const checkData = await checkRes.json();
+      const status = checkData.data.status;
+      if (status === 'finished') {
+        finished = true;
+        const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+        if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
+          exportUrl = exportTask.result.files[0].url;
+          jobSuccess = true;
+        } else jobError = true;
+      } else if (status === 'error') jobError = true;
     }
 
-    if (!jobSuccess || !exportUrl) throw new Error("Echek");
+    if (!jobSuccess || !exportUrl) throw new Error("Echek konpresyon");
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const dlRes = await fetch(exportUrl);
-    if (!dlRes.ok) throw new Error("Echek");
+    if (!dlRes.ok) throw new Error("Echek telechajman");
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
     
     const finalMime = isVideo ? 'video/mp4' : 'image/jpeg';
@@ -759,7 +693,7 @@ app.post('/compress', requireAuth, async (req, res) => {
 });
 
 app.post('/resize', requireAuth, async (req, res) => {
-  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib sou sèvè a' });
+  if (!FFMPEG_AVAILABLE) return res.status(501).json({ error: 'Ffmpeg pa disponib' });
   let tmpImg;
   const taskId = req.query.taskId;
   try {
@@ -775,12 +709,8 @@ app.post('/resize', requireAuth, async (req, res) => {
     if (width && height) {
       const outImg = path.join(os.tmpdir(), `out-res-${Date.now()}.png`);
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${width}:${height}`, '-y', outImg], { stdio: 'ignore' });
-      
       let responded = false;
-      
-      const timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch(e) {}
-      }, 60000);
+      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch(e) {} }, 60000);
 
       child.on('error', (err) => {
         clearTimeout(timer);
@@ -818,10 +748,7 @@ app.post('/resize', requireAuth, async (req, res) => {
     for (const s of sizes) {
       const outImg = path.join(os.tmpdir(), `out-res-${s}-${Date.now()}.png`);
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${s}:${s}`, '-y', outImg], { stdio: 'ignore' });
-      
-      const timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch(e) {}
-      }, 60000);
+      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch(e) {} }, 60000);
 
       child.on('error', (err) => {
         clearTimeout(timer);
@@ -879,18 +806,14 @@ app.post('/upload', requireAuth, async (req, res) => {
           if (headEndIdx !== -1) {
             const contentStart = headEndIdx + 4;
             const contentEnd = buffer.indexOf(endBuf, contentStart);
-            if (contentEnd !== -1) {
-              fileBuffer = buffer.subarray(contentStart, contentEnd);
-            } else {
-              fileBuffer = buffer.subarray(contentStart);
-            }
+            if (contentEnd !== -1) fileBuffer = buffer.subarray(contentStart, contentEnd);
+            else fileBuffer = buffer.subarray(contentStart);
           }
         }
       }
     }
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
-    let filename = req.headers['x-file-name'] || 'file.dat';
-    const url = await uploadToBref(fileBuffer, ct, filename);
+    const url = await uploadToBref(fileBuffer, 'application/pdf', 'pdf');
     if (taskId) tasks.set(taskId, { step: 'fini', url });
     res.json({ url });
   } catch (e) {
@@ -992,7 +915,6 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     if (urls.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn imaj' });
     
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
-    
     const tasksPayload = {};
     const mergeInputs = [];
     
@@ -1003,66 +925,40 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       tasksPayload[convertName] = { operation: "convert", input: importName, output_format: "pdf" };
       mergeInputs.push(convertName);
     });
-    
-    tasksPayload["merge-1"] = {
-      operation: "merge",
-      input: mergeInputs,
-      output_format: "pdf"
-    };
-    
-    tasksPayload["export-1"] = {
-      operation: "export/url",
-      input: "merge-1"
-    };
+    tasksPayload["merge-1"] = { operation: "merge", input: mergeInputs, output_format: "pdf" };
+    tasksPayload["export-1"] = { operation: "export/url", input: "merge-1" };
 
     const validKeys = CLOUDCONVERT_KEYS.filter(k => typeof k === 'string' && k.trim().length > 0);
     if (validKeys.length === 0) throw new Error("Echek");
 
     let exportUrl = null;
     let jobSuccess = false;
+    const key = validKeys[0];
 
-    for (const key of validKeys) {
-      try {
-        const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${key}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ tasks: tasksPayload })
-        });
-        
-        if (!ccRes.ok) continue;
-        
-        const jobData = await ccRes.json();
-        const jobId = jobData.data.id;
-        
-        let finished = false;
-        let jobError = false;
-        while (!finished && !jobError) {
-          await new Promise(r => setTimeout(r, 2000));
-          const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-            headers: { "Authorization": `Bearer ${key}` }
-          });
-          if (!checkRes.ok) {
-            jobError = true;
-            break;
-          }
-          const checkData = await checkRes.json();
-          const status = checkData.data.status;
-          if (status === 'finished') {
-            finished = true;
-            const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-            exportUrl = exportTask.result.files[0].url;
-            jobSuccess = true;
-          } else if (status === 'error') {
-            jobError = true;
-          }
-        }
-        if (jobSuccess) break;
-      } catch (e) {
-        continue;
-      }
+    const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ tasks: tasksPayload })
+    });
+    
+    if (!ccRes.ok) throw new Error("Echek");
+    const jobData = await ccRes.json();
+    const jobId = jobData.data.id;
+    
+    let finished = false;
+    let jobError = false;
+    while (!finished && !jobError) {
+      await new Promise(r => setTimeout(r, 2000));
+      const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, { headers: { "Authorization": `Bearer ${key}` } });
+      if (!checkRes.ok) { jobError = true; break; }
+      const checkData = await checkRes.json();
+      const status = checkData.data.status;
+      if (status === 'finished') {
+        finished = true;
+        const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+        exportUrl = exportTask.result.files[0].url;
+        jobSuccess = true;
+      } else if (status === 'error') jobError = true;
     }
     
     if (!jobSuccess || !exportUrl) throw new Error("Echek");
@@ -1070,8 +966,7 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const dlRes = await fetch(exportUrl);
     const dlBuf = Buffer.from(await dlRes.arrayBuffer());
-    
-    const finalUrl = await uploadToBref(dlBuf, 'application/pdf', 'document.pdf');
+    const finalUrl = await uploadToBref(dlBuf, 'application/pdf', 'pdf');
     
     if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
     res.json({ url: finalUrl });
@@ -1081,29 +976,9 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/:filename', requireAuth, async (req, res) => {
-  const taskId = req.query.taskId;
-  const filename = path.basename(req.params.filename || '');
-  if (!filename) return res.status(400).json({ error: 'Ou pa mete non fichye a' });
-  try {
-    if (taskId) tasks.set(taskId, { step: 'kòmanse' });
-    const buffer = await getRawBody(req, taskId);
-    if (buffer.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn fichye' });
-    if (taskId) tasks.set(taskId, { step: 'sovgade' });
-    
-    const url = await uploadToBref(buffer, req.headers['content-type'] || 'application/octet-stream', filename);
-    
-    if (taskId) tasks.set(taskId, { step: 'fini', url });
-    res.send(url);
-  } catch (error) {
-    if (taskId) tasks.set(taskId, { step: 'erè' });
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.use((req, res) => { res.status(404).send('Nou pa jwenn sa w ap chèche a'); });
 
-process.on('uncaughtException', (err) => {});
-process.on('unhandledRejection', (reason, promise) => {});
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
 
 app.listen(PORT, '0.0.0.0', () => {});
