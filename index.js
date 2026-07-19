@@ -15,12 +15,22 @@ const PORT = process.env.PORT || 3000;
 const ICON_URL = 'https://tout.adamdh7.org/Tout.png';
 const SERVER_TOKEN = process.env.TOUT_SERVER_TOKEN || 'https://tout.adamdh7.org';
 
-const CLOUDCONVERT_KEYS = [
-  process.env.CLOUDCONVERT_API_KEY,
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYWU2YTc1NWE4OWEwODg3MTVkODhhNTZmMDM4OGE1OGNiZTY0OWJiZjZmYTViYzg3ZDkzNThkNTMwZWM3YjZmY2Q0Zjg4OTI2OWVmNDNmYWEiLCJpYXQiOjE3ODI4NDgxNDYuMTgwNzU3LCJuYmYiOjE3ODI4NDgxNDYuMTgwNzU4LCJleHAiOjQ5Mzg1MjE3NDYuMTc0OTgzLCJzdWIiOiI3NjE1ODM1NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsInByZXNldC53cml0ZSIsInByZXNldC5yZWFkIiwid2ViaG9vay53cml0ZSJdfQ.IWtqehZZt8E1mkxUii3g0CKwwHyYqcrL4rKmYbGmB6oNpjEIlKhiNjfqDKcdAjebBsinY2sqf7rMnAJ4DS9osBBYpRTZSvMbPSVvE0wWL5K9zzCthrSchhODv7yRMOhmZkwoPqqcg3X8zhLtPR7em2zrhSUWJYfMy7T8GwXDPWjhZ7UsU4dsFZttbxbVXp2HbUUqmKtHpW1QvlXsh9iwAUSuYZWRKKRfzMU5_m80lerl1OGWY-rxttDCBROAzpp93RflkPdgy_EW0msCEkC0Agkvl6Y9iFLge1VCYevjvuz6Tg_M1EU-4WieJJUA8SlVefxOE_6enbpY3KFV32tucUCvE3MIusBtSsyafdgcxtPCM06pOhmK53Ne4K-7EDA9eBHQAVIcprMoabiQH2gct_dZOb58pDtoItPKrNTFBzs1lWZpPZfMN7oVzlfeTnZnO-srbmLQg7tNRdDjx2an4VO_BQtuZbiysO8E99YBx2GlDsCulkt2yS6vjUhkW9SQQPS7i-X3b9QmpcmOXsaz71g9yON6WWEElqIyu9Zu0rGnJM1VBy6oYr-L_ZXlhKDLf_0SpCuyjq9IZ_k-ONL0jCYOWEi9MQVEnEW-wR7FmHtivNcf7vTWYnksjYSSue939W7nKboo_mwYVyRfINmibxLb6Ha1y9BHu9vsS-AR4jM',
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiYjU5MWZiYTU5MzgzY2I0ZWI4NTJlYWEzNGMyOTAzNjVmMzdkMGEzYzllNjM4NjIwYzAzMDI0MmUyNmFhZTJlYTU2NzNkMDkyZDZlZjRhMDgiLCJpYXQiOjE3ODI4NTEwODguNzMzMjYyLCJuYmYiOjE3ODI4NTEwODguNzMzMjYzLCJleHAiOjQ5Mzg1MjQ2ODguNzI4MTQ5LCJzdWIiOiI3NjE1ODg3MiIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.NwXOyWgVrXMiJC7mk2NYUWFBy-9Dqs4UaxR2VezRWZe8Sx-QsI0HgpHhX8QsvuVa9VMr6ejg464IETha3vaCtpmwLEh2VPvzUd2FWYydQ4KSL4jO3TYBsnm0mwBaJoxmNUsXolK10O3maYqRXUCXj2sCTEe8pPKDKaL6xyUhCKj6u1VLJkQMXGeJVWxf624CPtiGiZ2_ihfRZIIckhVDMgzfy3kHqHwG-ElOTJ76_mF--P_tCsJHJ3C3S4BRo0xQlLzeWa-znI_Uy6PhbD8fEDTYFWm-eUPtVYxaMrc9_pcqPu7XIMpYkb8jI-pXNTFyyUspAIBs2Q1lJjyO_cnoGgjwjWKUPXkgkn7cyFS9ixV_GcYZtV6OV1jSPT0zgs-RQMBPdPK53dDSBFaZkd51NXzNu12ryPF9Bd5Uzib0Dh96IUtFY0xCWVqkVfe9nGrYHJMZygXz_ILZhf13YIgzIevs1iyaVh8ymIfk9P2-DnBuldAeHKFoPv_UCdFtfa2sFtB1NM6zMGvMtNUboJdgodYtemVsBuQ-P80ERWq3CDUI5rk9rcV1Rbg7mxvx56QUA8GQM8c1PjPq07muuqIVoj6cMyAFcK_rTpHV0_x36m_KAATOf8xwod_4VwKarLdjSE3vV1nHLSS83T0Cyv7zIdeAU1pyoQoeEf7bQY16q1U',
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiNWU4YTUwZTVmODczNWI3Y2RiMTczOTcyYTlmODFiMmQ4NGY5YzU4NmVmOGU4MWNiOTkwNWNjYWQ4ZGI0YWFmNTA0YjA5ZjkwZWNiMjg0N2UiLCJpYXQiOjE3ODI4NTExNTUuMzE5ODY1LCJuYmYiOjE3ODI4NTExNTUuMzE5ODY2LCJleHAiOjQ5Mzg1MjQ3NTUuMzE1NTQ2LCJzdWIiOiI3NjE1ODg4NCIsInNjb3BlcyI6WyJ1c2VyLnJlYWQiLCJ1c2VyLndyaXRlIiwidGFzay5yZWFkIiwidGFzay53cml0ZSIsIndlYmhvb2sucmVhZCIsIndlYmhvb2sud3JpdGUiLCJwcmVzZXQucmVhZCIsInByZXNldC53cml0ZSJdfQ.J9UI0QSs4nFVlyfIXEBal71tvFL4Sd8P-oVlvtQKsy1z-8AB_E6MpKQVEOP39MBogTaawJVyrJTu4BYq2tYBYWuH5AsHXSF6vhNO2gwafvL0yoPXmV6jbAHT9gb0u9rn6K1qskPaqf-Aqr278uQqzDqAEk-Ws1hnbhAPr-4RFjd0pXWfFNn8Vy-lPtgJzXcYbE7i-zpf6g1Vu5YUbFhtkwDOmG97POhqSD9oqb284iX_iQMwlwLPA2A-bcRzmBuUrU1WgeFdYNubr-4pDH8b-p0Lx532CFcYNo9w2yeDmdmSaQyoykA-kyW5pffV6k5TRTvOyklNPqzWfJ4MILOK8iqBNbhpwsn9SFLrEuy6vsfGop0YBnnjnmlQ6SQsfiVhBje8_FcqHADOyTZrSWRtzsWpHx4Nkv1QosUMbHKAQ59zEORz2yim_CKkZkH6tcE8vcrG4TosEFDd6zE7UFeE-36YSLRZvQ8YMgxSKQ2UdYuaY0TgMZUM-Eg3UMUprRMUjMa8YuX49DteBm4YNP9oyKjpyqLAKnl8_M3ibUWnV0iV9zpe9qsZWbE8VEJ37lI90fhP-pLwQX-RV2bkS5J8dGqmYgmU4afzc4RJiiV85YTBOA28BaGoPobDB_mPSliJsZeEdNn8HtSt10cglcU9PasWJF3MdCnmKNzZuh4d6o4'
-].filter(k => typeof k === 'string' && k.trim().length > 0);
+const CLOUDCONVERT_KEYS = Object.keys(process.env)
+  .filter(key => key.startsWith('CLOUDCONVERT_KEY') || key === 'CLOUDCONVERT_API_KEY')
+  .map(key => process.env[key])
+  .filter(k => typeof k === 'string' && k.trim().length > 0);
+
+const CF_AI_CREDENTIALS = [];
+if (process.env.CF_ACCOUNT_ID && process.env.CF_AI_TOKEN) {
+  CF_AI_CREDENTIALS.push({ account: process.env.CF_ACCOUNT_ID, token: process.env.CF_AI_TOKEN });
+}
+for (let i = 1; i <= 20; i++) {
+  const acc = process.env[`CF_AI_ACCOUNT_${i}`];
+  const tok = process.env[`CF_AI_TOKEN_${i}`];
+  if (acc && tok) {
+    CF_AI_CREDENTIALS.push({ account: acc, token: tok });
+  }
+}
 
 const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'localhost:']);
 
@@ -382,14 +392,24 @@ async function servePublicFile(req, res, requestPath) {
   return serveS3RawFile(req, res, key, filename);
 }
 
+async function fetchAIFallback(model, bodyPayload) {
+  for (const cred of CF_AI_CREDENTIALS) {
+    try {
+      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cred.account}/ai/run/${model}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${cred.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload)
+      });
+      if (res.ok) return res;
+    } catch (e) {}
+  }
+  return null;
+}
+
 async function processAndUploadImage(prompt) {
   try {
-    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt, num_steps: 4 })
-    });
-    if (!aiRaw.ok) return '';
+    const aiRaw = await fetchAIFallback('@cf/black-forest-labs/flux-1-schnell', { prompt: prompt, num_steps: 4 });
+    if (!aiRaw) return '';
     const aiResponse = await aiRaw.json();
     if (!aiResponse || !aiResponse.result || !aiResponse.result.image) return '';
     const binaryString = atob(aiResponse.result.image);
@@ -551,16 +571,9 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n"
-      + "- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n"
-      + "- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\n"
-      + "You absolutely CAN generate searsh by using the [IMAGE: ...],  [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response";
+    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\nYou absolutely CAN generate searsh by using the [IMAGE: ...],  [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response";
 
-    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true })
-    });
+    const aiRaw = await fetchAIFallback('@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true });
 
     let frontendMessage = '';
     let dbMessage = '';
@@ -622,13 +635,9 @@ app.post('/ai', requireAuth, async (req, res) => {
         const contextLimit = context.slice(-6);
 
         try {
-          const aiFinalRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true })
-          });
-          if (!aiFinalRaw.ok) {
-            sendToClientFinal("Sistèm sa a pa disponib kounye a.");
+          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true });
+          if (!aiFinalRaw) {
+            res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
           }
           const aiFinalStream = aiFinalRaw.body;
@@ -754,8 +763,8 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     }
 
-    if (!aiRaw.ok) {
-      await processStr("Sistèm sa a pa disponib kounye a.");
+    if (!aiRaw) {
+      res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
     } else {
       const aiResponseStream = aiRaw.body;
       if (aiResponseStream && aiResponseStream.getReader) {
@@ -783,10 +792,10 @@ app.post('/ai', requireAuth, async (req, res) => {
             }
           }
         } catch (e) {
-          await processStr("Gen yon erè ki fèt nan kouran an.");
+          res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
         }
       } else {
-        await processStr("Mwen regrèt, mwen pa ka bay yon repons.");
+        res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
       }
     }
 
@@ -824,12 +833,8 @@ app.post('/jerere', requireAuth, async (req, res) => {
   const prompt = body.prompt?.trim();
   if (!prompt) return res.status(400).json({ error: 'Ou pa bay okenn enstriksyon (prompt)' });
   try {
-    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt, num_steps: 4 })
-    });
-    if (!aiRaw.ok) return res.status(503).json({ error: "Sistèm sa a pa disponib kounye a." });
+    const aiRaw = await fetchAIFallback('@cf/black-forest-labs/flux-1-schnell', { prompt: prompt, num_steps: 4 });
+    if (!aiRaw) return res.status(503).json({ type: 'error', error: "Sistèm sa a pa disponib kounye a." });
     const aiResponse = await aiRaw.json();
     if (!aiResponse || !aiResponse.result || !aiResponse.result.image) throw new Error("Entèlijans atifisyèl la pa bay yon imaj ki valab.");
     const binaryString = atob(aiResponse.result.image);
@@ -839,7 +844,7 @@ app.post('/jerere', requireAuth, async (req, res) => {
     const url = await uploadToBref(Buffer.from(bytes), filename);
     res.json({ url });
   } catch (error) {
-    res.status(500).json({ error: "Sistèm sa a pa disponib kounye a." });
+    res.status(500).json({ type: 'error', error: "Sistèm sa a pa disponib kounye a." });
   }
 });
 
@@ -866,19 +871,15 @@ app.post('/calcul', requireAuth, async (req, res) => {
     const systemPrompt = "You are Asistan, an expert in Math and Science. Break down calculations step-by-step logically.";
     const userPrompt = `"${calculation}"`;
 
-    const aiRaw = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.CF_AI_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], max_tokens: 3000, stream: true })
-    });
-    if (!aiRaw.ok) {
-      res.write("Sistèm sa a pa disponib kounye a.");
+    const aiRaw = await fetchAIFallback('@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], max_tokens: 3000, stream: true });
+    if (!aiRaw) {
+      res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
       return res.end();
     }
     const aiResponseStream = aiRaw.body;
     if (!aiResponseStream || !aiResponseStream.getReader) {
-      res.end("Sistèm sa a pa disponib kounye a.");
-      return;
+      res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
+      return res.end();
     }
     const reader = aiResponseStream.getReader();
     const decoder = new TextDecoder();
@@ -905,7 +906,7 @@ app.post('/calcul', requireAuth, async (req, res) => {
     }
     res.end();
   } catch (e) {
-    res.write("Sistèm sa a pa disponib kounye a.");
+    res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
     res.end();
   }
 });
@@ -1484,7 +1485,7 @@ app.get('/:filename', async (req, res, next) => {
 
 app.use((req, res) => { res.status(404).send('Nou pa jwenn sa w ap chèche a'); });
 
-process.on('uncaughtException', (err) => {});
-process.on('unhandledRejection', (reason, promise) => {});
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
 
 app.listen(PORT, '0.0.0.0', () => {});
