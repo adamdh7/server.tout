@@ -437,7 +437,7 @@ async function performSearch(query) {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true })
+      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true, include_answer: true })
     });
     const data = await res.json();
     let text = '';
@@ -445,6 +445,11 @@ async function performSearch(query) {
     let foundLinks = [];
     if (data.images && data.images.length > 0) foundImages = data.images;
     if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
+    
+    if (data.answer) {
+      text += 'Tavily AI Answer: ' + data.answer + '\n\n';
+    }
+    
     for (const r of data.results) {
       text += 'URL: ' + (r.url || 'Lyen pa disponib') + '\nContenu: ' + r.content + '\n\n';
       if (r.url) foundLinks.push(r.url);
@@ -606,7 +611,9 @@ app.post('/ai', requireAuth, async (req, res) => {
             totalLength += l;
         }
     }
-    const context = validContext.reverse().map(m => ({ role: m.role, content: m.content }));
+    
+    const stripThink = (text) => (text || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+    const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
     
     let activeCharCount = userMessage.length;
     for (const msg of context) {
@@ -786,7 +793,7 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
 
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below. IMPORTANT: You MUST reply in the EXACT SAME LANGUAGE that the user used. DO NOT mention that you searched the web. DO NOT say 'Here are the results'. Just answer directly.\n\nSearch Results:\n" + searchResultsText;
+        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below. If there is a 'Tavily AI Answer', use it as the main basis for your response. IMPORTANT: You MUST reply in the EXACT SAME LANGUAGE that the user used. DO NOT mention that you searched the web. DO NOT say 'Here are the results'. Just answer directly.\n\nSearch Results:\n" + searchResultsText;
         if (preContent) {
             finalSystemPrompt += `\n\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said. Do NOT use search tags again.`;
         }
