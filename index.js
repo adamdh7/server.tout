@@ -1,4 +1,3 @@
-require('dotenv').config();
 const express = require('express');
 const { S3Client, GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const { MongoClient } = require('mongodb');
@@ -7,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const vm = require('vm');
+require('dotenv').config();
 
 const app = express();
 app.set('trust proxy', true);
@@ -462,6 +462,10 @@ async function performSearch(query) {
 
 app.post('/ai/clear', requireAuth, async (req, res) => {
   const sess = req.body.session_id || 'global';
+  if (activeStreams.has(sess)) {
+    try { activeStreams.get(sess).abortController.abort(); } catch (e) {}
+    activeStreams.delete(sess);
+  }
   try {
     const database = await getDb();
     const msgIds = await database.collection('messages').find({ session_id: sess }).map(m => m.id).toArray();
@@ -599,7 +603,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     });
 
-    const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(30).toArray();
+    const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(70).toArray();
     
     let totalLength = 0;
     const validContext = [];
@@ -612,7 +616,12 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
     }
     
-    const stripThink = (text) => (text || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+    const stripThink = (text) => {
+      let t = (text || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
+      t = t.replace(/<think>[\s\S]*$/gi, '');
+      return t.trim();
+    };
+    
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
     
     let activeCharCount = userMessage.length;
@@ -621,7 +630,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
 
     let currentModel = '@cf/meta/llama-3.1-8b-instruct';
-    if (activeCharCount > 2000) {
+    if (activeCharCount > 4000) {
       currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
     }
 
@@ -699,7 +708,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                   await handleTag(tagContent, allowSearchFlag);
 
                   this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
-                  if (allowSearchFlag && /^\[\s*SEARCH\s*:/i.test(tagContent)) {
+                  if (allowSearchFlag && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
                     abortOuter = true;
                   }
                   continue;
