@@ -434,29 +434,35 @@ async function processAndUploadImage(prompt) {
 
 async function performSearch(query) {
   try {
-    const res = await fetch('https://api.tavily.com/search', {
+    const reqRes = await fetch('https://api.tavily.com/research', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query: query, search_depth: 'basic', max_results: 5, include_images: true, include_answer: true })
+      headers: { 'Authorization': `Bearer ${process.env.TAVILY_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: query, model: 'auto', search_depth: 'advanced' })
     });
-    const data = await res.json();
-    let text = '';
-    let foundImages = [];
-    let foundLinks = [];
-    if (data.images && data.images.length > 0) foundImages = data.images;
-    if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
-    
-    if (data.answer) {
-      text += data.answer.trim() + '\n';
+    const reqData = await reqRes.json();
+    const reqId = reqData.request_id;
+    if (!reqId) return { context: 'Nou pa jwenn anyen.' };
+
+    let content = '';
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const chkRes = await fetch(`https://api.tavily.com/research/${reqId}`, {
+        headers: { 'Authorization': `Bearer ${process.env.TAVILY_KEY}` }
+      });
+      if (!chkRes.ok) continue;
+      const chkData = await chkRes.json();
+      if (chkData.status === 'completed') {
+        content = chkData.content || '';
+        break;
+      }
     }
-    
-    for (const r of data.results) {
-      if (r.url) foundLinks.push(r.url);
-      text += (r.url ? r.url + '\n' : '') + r.content + '\n';
+    if (content) {
+      if (content.length > 8000) content = content.substring(0, 8000) + '...';
+      return { context: content };
     }
-    return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
+    return { context: 'Nou pa jwenn anyen.' };
   } catch (e) {
-    return { context: 'Erè pandan rechèch.', images: [], links: [] };
+    return { context: 'Erè pandan rechèch la.' };
   }
 }
 
@@ -643,14 +649,12 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, a professional AI assistant. You have secure internal tools to generate images or search the web.\nTo generate an image, output exactly: [IMAGE: description in english].\nTo search the web, output exactly: [SEARCH: query].\nYou can only perform one action at a time. Reply directly and never mention your internal tools, processes, or data sharing.";
+    const systemPrompt = "You are Asistan, an advanced AI. You have internal tools to generate images or search the web.\nTo use a tool, output exactly ONE of these tags:\n- For images: [IMAGE: description in english]\n- For web search: [SEARCH: query]\nRules:\n1. Use tools only when necessary.\n2. Do not explain your tools to the user.\n3. Output only one tool tag at a time.\n4. Answer directly and professionally.";
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
     let attachmentsToSave = [];
     let imageIndex = 0;
-    let searchImageIndex = 0;
-    let allImages = [];
 
     function sendToClientFinal(str) {
       if (!str || signal.aborted) return;
@@ -659,119 +663,10 @@ app.post('/ai', requireAuth, async (req, res) => {
       streamState.dbMessage += str;
     }
 
-    function sendToClientThink(str) {
-      if (!str || signal.aborted) return;
-      res.write(JSON.stringify({ type: 'think', content: str }) + '\n');
-      streamState.dbMessage += str;
-    }
-
-    function createProcessor(allowSearchFlag) {
-      return {
-        streamBuffer: '',
-        isThinking: false,
-        async processStr(str) {
-          if (!str || signal.aborted) return false;
-          this.streamBuffer += str;
-          let abortOuter = false;
-
-          while (!signal.aborted) {
-            if (!this.isThinking) {
-              const thinkStart = this.streamBuffer.indexOf('<think>');
-              if (thinkStart !== -1) {
-                sendToClientFinal(this.streamBuffer.substring(0, thinkStart));
-                this.isThinking = true;
-                streamState.dbMessage += '<think>\n';
-                this.streamBuffer = this.streamBuffer.substring(thinkStart + 7);
-                continue;
-              }
-            } else {
-              const thinkEnd = this.streamBuffer.indexOf('</think>');
-              if (thinkEnd !== -1) {
-                sendToClientThink(this.streamBuffer.substring(0, thinkEnd));
-                this.isThinking = false;
-                streamState.dbMessage += '\n</think>\n';
-                this.streamBuffer = this.streamBuffer.substring(thinkEnd + 8);
-                continue;
-              }
-            }
-
-            const tagStart = this.streamBuffer.indexOf('[');
-            if (tagStart !== -1) {
-              const tagEnd = this.streamBuffer.indexOf(']', tagStart);
-              if (tagEnd !== -1) {
-                const tagContent = this.streamBuffer.substring(tagStart, tagEnd + 1);
-                if (/^\[\s*(IMAGE|SEARCH|IMAGES?)\s*:/i.test(tagContent)) {
-                  const beforeTag = this.streamBuffer.substring(0, tagStart);
-                  if (this.isThinking) sendToClientThink(beforeTag);
-                  else sendToClientFinal(beforeTag);
-
-                  await handleTag(tagContent, allowSearchFlag, this);
-
-                  this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
-                  if (allowSearchFlag && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
-                    if (currentModel === '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b') {
-                      abortOuter = true;
-                      break;
-                    }
-                  }
-                  continue;
-                } else {
-                  const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
-                  if (this.isThinking) sendToClientThink(beforeBracket);
-                  else sendToClientFinal(beforeBracket);
-                  this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
-                  continue;
-                }
-              } else {
-                 if (this.streamBuffer.length - tagStart > 2500) {
-                     const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
-                     if (this.isThinking) sendToClientThink(beforeBracket);
-                     else sendToClientFinal(beforeBracket);
-                     this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
-                     continue;
-                 }
-                 break;
-              }
-            }
-
-            let safeLen = this.streamBuffer.length - 15;
-            if (safeLen > 0) {
-              const lastLt = this.streamBuffer.lastIndexOf('<', safeLen);
-              const lastSq = this.streamBuffer.lastIndexOf('[', safeLen);
-              const maxLast = Math.max(lastLt, lastSq);
-              if (maxLast !== -1) safeLen = maxLast;
-              if (safeLen > 0) {
-                const chunkToFlush = this.streamBuffer.substring(0, safeLen);
-                if (this.isThinking) sendToClientThink(chunkToFlush);
-                else sendToClientFinal(chunkToFlush);
-                this.streamBuffer = this.streamBuffer.substring(safeLen);
-              }
-            }
-            break;
-          }
-          return abortOuter;
-        },
-        flush() {
-          if (this.streamBuffer.length > 0 && !signal.aborted) {
-            if (this.isThinking) {
-              sendToClientThink(this.streamBuffer);
-              streamState.dbMessage += this.streamBuffer + '\n</think>\n';
-            } else {
-              sendToClientFinal(this.streamBuffer);
-            }
-            this.streamBuffer = '';
-          } else if (this.isThinking && !signal.aborted) {
-             streamState.dbMessage += '\n</think>\n';
-          }
-        }
-      };
-    }
-
-    async function handleTag(tag, allowSearch, processor) {
+    async function handleTag(tag, allowSearch, isThinking) {
       if (signal.aborted) return;
       const tImgMatch = tag.match(/^\[\s*IMAGE\s*:\s*([\s\S]*?)\]$/i);
       const tSrcMatch = tag.match(/^\[\s*SEARCH\s*:\s*([\s\S]*?)\]$/i);
-      const tRefMatch = tag.match(/^\[\s*IMAGES?\s*:\s*(SEARCH_)?(\d+)\]$/i);
 
       if (tImgMatch) {
         const prompt = tImgMatch[1].trim();
@@ -787,14 +682,13 @@ app.post('/ai', requireAuth, async (req, res) => {
         if (!allowSearch) return;
         const query = tSrcMatch[1].trim();
         
-        if (!signal.aborted) {
-          res.write(JSON.stringify({ type: 'think', content: query + '\n' }) + '\n');
-        }
+        const clientMsg = `Recherche: ${query}\n`;
+        res.write(JSON.stringify({ type: 'think', content: clientMsg }) + '\n');
         
-        if (processor && !processor.isThinking) {
-            streamState.dbMessage += `\n<think>\n${query}\n</think>\n`;
+        if (isThinking) {
+          streamState.dbMessage += clientMsg;
         } else {
-            streamState.dbMessage += query + '\n';
+          streamState.dbMessage += `\n<think>\n${clientMsg}</think>\n`;
         }
         
         const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
@@ -802,21 +696,12 @@ app.post('/ai', requireAuth, async (req, res) => {
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
         
-        let searchResultsText = searchRes.context + '\n';
-        if (searchRes.images && searchRes.images.length > 0) {
-          allImages = allImages.concat(searchRes.images);
-          searchResultsText += searchRes.images.join('\n') + '\n';
-          searchRes.images.forEach(imgUrl => {
-            searchImageIndex++;
-            const dbTag = `[IMAGES: SEARCH_${searchImageIndex}]`;
-            attachmentsToSave.push({ placeholder: dbTag, url: imgUrl });
-          });
-        }
-
+        let searchResultsText = `${searchRes.context}\n`;
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. Answer directly using the provided data. Reply in the EXACT SAME LANGUAGE as the user. DO NOT mention your sources.\n\nData:\n" + searchResultsText;
+        let finalSystemPrompt = "You are Asistan. Answer directly based on the search results below. Reply in the exact same language as the user. Do not mention you performed a search. Do not use search tags again.\n\nSearch Results:\n" + searchResultsText;
+        
         if (preContent) {
-            finalSystemPrompt += `\n\nYou already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there. Do NOT repeat yourself.`;
+          finalSystemPrompt += `\n\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said.`;
         }
         
         const contextLimit = context.slice(-15);
@@ -857,21 +742,128 @@ app.post('/ai', requireAuth, async (req, res) => {
             innerProcessor.flush();
           }
         } catch (e) {}
-      } else if (tRefMatch) {
-        const rawTag = tag.trim().toUpperCase();
-        let foundUrl = contextAttMap.get(rawTag);
-        if (!foundUrl && tRefMatch[1]) {
-          const idx = parseInt(tRefMatch[2], 10) - 1;
-          if (allImages && allImages[idx]) foundUrl = `\n\n${allImages[idx]}\n\n`;
-        }
-        if (foundUrl) {
-          let cleanUrl = foundUrl;
-          if (!cleanUrl.startsWith('\n')) cleanUrl = `\n\n${cleanUrl}\n\n`;
-          sendToClientFinal(cleanUrl);
-        } else {
-          sendToClientFinal(tag);
-        }
       }
+    }
+
+    function createProcessor(allowSearchFlag) {
+      return {
+        streamBuffer: '',
+        isThinking: false,
+        async processStr(str) {
+          if (!str || signal.aborted) return false;
+          this.streamBuffer += str;
+          let abortOuter = false;
+
+          while (!signal.aborted) {
+            if (!this.isThinking) {
+              const thinkStart = this.streamBuffer.indexOf('<think>');
+              if (thinkStart !== -1) {
+                sendToClientFinal(this.streamBuffer.substring(0, thinkStart));
+                this.isThinking = true;
+                streamState.dbMessage += '<think>\n';
+                this.streamBuffer = this.streamBuffer.substring(thinkStart + 7);
+                continue;
+              }
+            } else {
+              const thinkEnd = this.streamBuffer.indexOf('</think>');
+              if (thinkEnd !== -1) {
+                const thinkContent = this.streamBuffer.substring(0, thinkEnd);
+                if (thinkContent) {
+                  res.write(JSON.stringify({ type: 'think', content: thinkContent }) + '\n');
+                  streamState.dbMessage += thinkContent;
+                }
+                streamState.dbMessage += '\n</think>\n';
+                this.isThinking = false;
+                this.streamBuffer = this.streamBuffer.substring(thinkEnd + 8);
+                continue;
+              }
+            }
+
+            const tagStart = this.streamBuffer.indexOf('[');
+            if (tagStart !== -1) {
+              const tagEnd = this.streamBuffer.indexOf(']', tagStart);
+              if (tagEnd !== -1) {
+                const tagContent = this.streamBuffer.substring(tagStart, tagEnd + 1);
+                if (/^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
+                  const beforeTag = this.streamBuffer.substring(0, tagStart);
+                  if (this.isThinking) {
+                    if (beforeTag) {
+                      res.write(JSON.stringify({ type: 'think', content: beforeTag }) + '\n');
+                      streamState.dbMessage += beforeTag;
+                    }
+                  } else {
+                    sendToClientFinal(beforeTag);
+                  }
+
+                  await handleTag(tagContent, allowSearchFlag, this.isThinking);
+
+                  this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
+                  if (allowSearchFlag && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
+                    abortOuter = true;
+                  }
+                  continue;
+                } else {
+                  const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
+                  if (this.isThinking) {
+                    res.write(JSON.stringify({ type: 'think', content: beforeBracket }) + '\n');
+                    streamState.dbMessage += beforeBracket;
+                  } else {
+                    sendToClientFinal(beforeBracket);
+                  }
+                  this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
+                  continue;
+                }
+              } else {
+                 if (this.streamBuffer.length - tagStart > 2500) {
+                     const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
+                     if (this.isThinking) {
+                       res.write(JSON.stringify({ type: 'think', content: beforeBracket }) + '\n');
+                       streamState.dbMessage += beforeBracket;
+                     } else {
+                       sendToClientFinal(beforeBracket);
+                     }
+                     this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
+                     continue;
+                 }
+                 break;
+              }
+            }
+
+            let safeLen = this.streamBuffer.length - 15;
+            if (safeLen > 0) {
+              const lastLt = this.streamBuffer.lastIndexOf('<', safeLen);
+              const lastSq = this.streamBuffer.lastIndexOf('[', safeLen);
+              const maxLast = Math.max(lastLt, lastSq);
+              if (maxLast !== -1) safeLen = maxLast;
+              if (safeLen > 0) {
+                const chunkToFlush = this.streamBuffer.substring(0, safeLen);
+                if (this.isThinking) {
+                  res.write(JSON.stringify({ type: 'think', content: chunkToFlush }) + '\n');
+                  streamState.dbMessage += chunkToFlush;
+                } else {
+                  sendToClientFinal(chunkToFlush);
+                }
+                this.streamBuffer = this.streamBuffer.substring(safeLen);
+              }
+            }
+            break;
+          }
+          return abortOuter;
+        },
+        flush() {
+          if (this.streamBuffer.length > 0 && !signal.aborted) {
+            if (this.isThinking) {
+              res.write(JSON.stringify({ type: 'think', content: this.streamBuffer }) + '\n');
+              streamState.dbMessage += this.streamBuffer + '\n</think>\n';
+            } else {
+              sendToClientFinal(this.streamBuffer);
+            }
+            this.streamBuffer = '';
+          } else if (this.isThinking && !signal.aborted) {
+             streamState.dbMessage += '\n</think>\n';
+          }
+        }
+      };
     }
 
     const mainProcessor = createProcessor(true);
