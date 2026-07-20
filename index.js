@@ -627,7 +627,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\nYou absolutely CAN generate search by using the [IMAGE: ...], [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response.\nIMPORTANT: Only generate an image if it is absolutely necessary or explicitly requested by the user. NEVER generate an image without a valid reason.";
+    const systemPrompt = "You are Asistan, an AI assistant. You possess the capability to generate images and search the web.\n- To generate an image, you MUST write exactly: [IMAGE: description of the image in english] and NOTHING ELSE inside the bracket.\n- To search the web, you MUST write exactly: [SEARCH: your search query] and NOTHING ELSE inside the bracket.\nYou absolutely CAN generate search by using the [IMAGE: ...], [SEARCH: ....] tag. Use this ability whenever requested by the user, and whenever it's necessary for a better response.\nIMPORTANT: Only generate an image if it is absolutely necessary or explicitly requested by the user. NEVER generate an image without a valid reason. ALWAYS reply directly to the user. Do not explain what you are going to do.";
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -647,6 +647,105 @@ app.post('/ai', requireAuth, async (req, res) => {
       if (!str || signal.aborted) return;
       res.write(JSON.stringify({ type: 'think', content: str }) + '\n');
       streamState.dbMessage += str;
+    }
+
+    function createProcessor(allowSearchFlag) {
+      return {
+        streamBuffer: '',
+        isThinking: false,
+        async processStr(str) {
+          if (!str || signal.aborted) return false;
+          this.streamBuffer += str;
+          let abortOuter = false;
+
+          while (!signal.aborted) {
+            if (!this.isThinking) {
+              const thinkStart = this.streamBuffer.indexOf('<think>');
+              if (thinkStart !== -1) {
+                sendToClientFinal(this.streamBuffer.substring(0, thinkStart));
+                this.isThinking = true;
+                streamState.dbMessage += '<think>\n';
+                this.streamBuffer = this.streamBuffer.substring(thinkStart + 7);
+                continue;
+              }
+            } else {
+              const thinkEnd = this.streamBuffer.indexOf('</think>');
+              if (thinkEnd !== -1) {
+                sendToClientThink(this.streamBuffer.substring(0, thinkEnd));
+                this.isThinking = false;
+                streamState.dbMessage += '\n</think>\n';
+                this.streamBuffer = this.streamBuffer.substring(thinkEnd + 8);
+                continue;
+              }
+            }
+
+            const tagStart = this.streamBuffer.indexOf('[');
+            if (tagStart !== -1) {
+              const tagEnd = this.streamBuffer.indexOf(']', tagStart);
+              if (tagEnd !== -1) {
+                const tagContent = this.streamBuffer.substring(tagStart, tagEnd + 1);
+                if (/^\[\s*(IMAGE|SEARCH|IMAGES?)\s*:/i.test(tagContent)) {
+                  const beforeTag = this.streamBuffer.substring(0, tagStart);
+                  if (this.isThinking) sendToClientThink(beforeTag);
+                  else sendToClientFinal(beforeTag);
+
+                  await handleTag(tagContent, allowSearchFlag);
+
+                  this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
+                  if (allowSearchFlag && /^\[\s*SEARCH\s*:/i.test(tagContent)) {
+                    abortOuter = true;
+                  }
+                  continue;
+                } else {
+                  const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
+                  if (this.isThinking) sendToClientThink(beforeBracket);
+                  else sendToClientFinal(beforeBracket);
+                  this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
+                  continue;
+                }
+              } else {
+                 if (this.streamBuffer.length - tagStart > 2500) {
+                     const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
+                     if (this.isThinking) sendToClientThink(beforeBracket);
+                     else sendToClientFinal(beforeBracket);
+                     this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
+                     continue;
+                 }
+                 break;
+              }
+            }
+
+            let safeLen = this.streamBuffer.length - 15;
+            if (safeLen > 0) {
+              const lastLt = this.streamBuffer.lastIndexOf('<', safeLen);
+              const lastSq = this.streamBuffer.lastIndexOf('[', safeLen);
+              const maxLast = Math.max(lastLt, lastSq);
+              if (maxLast !== -1) safeLen = maxLast;
+              if (safeLen > 0) {
+                const chunkToFlush = this.streamBuffer.substring(0, safeLen);
+                if (this.isThinking) sendToClientThink(chunkToFlush);
+                else sendToClientFinal(chunkToFlush);
+                this.streamBuffer = this.streamBuffer.substring(safeLen);
+              }
+            }
+            break;
+          }
+          return abortOuter;
+        },
+        flush() {
+          if (this.streamBuffer.length > 0 && !signal.aborted) {
+            if (this.isThinking) {
+              sendToClientThink(this.streamBuffer);
+              streamState.dbMessage += this.streamBuffer + '\n</think>\n';
+            } else {
+              sendToClientFinal(this.streamBuffer);
+            }
+            this.streamBuffer = '';
+          } else if (this.isThinking && !signal.aborted) {
+             streamState.dbMessage += '\n</think>\n';
+          }
+        }
+      };
     }
 
     async function handleTag(tag, allowSearch) {
@@ -675,8 +774,6 @@ app.post('/ai', requireAuth, async (req, res) => {
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
         
-        sendToClientThink('\n' + searchRes.context + '\n\n');
-        
         let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n\n';
         if (searchRes.images && searchRes.images.length > 0) {
           allImages = allImages.concat(searchRes.images);
@@ -689,9 +786,9 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
 
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below. IMPORTANT: You MUST reply in the EXACT SAME LANGUAGE that the user used in their last message. DO NOT mention that you searched the web. DO NOT say 'Here are the results'. Just answer the user's question directly.\n\nResults:\n" + searchResultsText;
+        let finalSystemPrompt = "You are Asistan. Answer naturally and directly using the search results below. IMPORTANT: You MUST reply in the EXACT SAME LANGUAGE that the user used. DO NOT mention that you searched the web. DO NOT say 'Here are the results'. Just answer directly.\n\nSearch Results:\n" + searchResultsText;
         if (preContent) {
-            finalSystemPrompt += `\n\nImportant: You were in the middle of generating a response. This is what you already output:\n"""\n${preContent}\n"""\nContinue your thought directly from there using the search results without repeating what you already said. Do NOT use search tags again.`;
+            finalSystemPrompt += `\n\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said. Do NOT use search tags again.`;
         }
         
         const contextLimit = context.slice(-15);
@@ -707,6 +804,9 @@ app.post('/ai', requireAuth, async (req, res) => {
             const readerFinal = aiFinalStream.getReader();
             const decoderFinal = new TextDecoder();
             let bufferFinal = '';
+            
+            const innerProcessor = createProcessor(false);
+
             while (!signal.aborted) {
               const { done, value } = await readerFinal.read();
               if (done || signal.aborted) break;
@@ -720,12 +820,13 @@ app.post('/ai', requireAuth, async (req, res) => {
                     const dataStr = cleanLineFinal.substring(5).trim();
                     const dataFinal = JSON.parse(dataStr);
                     if (dataFinal.response !== undefined && dataFinal.response !== null) {
-                      await processStr(String(dataFinal.response), false);
+                      await innerProcessor.processStr(String(dataFinal.response));
                     }
                   } catch (e) {}
                 }
               }
             }
+            innerProcessor.flush();
           }
         } catch (e) {}
       } else if (tRefMatch) {
@@ -745,88 +846,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     }
 
-    let streamBuffer = '';
-    let isThinking = false;
-
-    async function processStr(str, allowSearch = true) {
-      if (!str || signal.aborted) return false;
-      streamBuffer += str;
-      let abortOuter = false;
-
-      while (!signal.aborted) {
-        if (!isThinking) {
-          const thinkStart = streamBuffer.indexOf('<think>');
-          if (thinkStart !== -1) {
-            sendToClientFinal(streamBuffer.substring(0, thinkStart));
-            isThinking = true;
-            streamState.dbMessage += '<think>\n';
-            streamBuffer = streamBuffer.substring(thinkStart + 7);
-            continue;
-          }
-        } else {
-          const thinkEnd = streamBuffer.indexOf('</think>');
-          if (thinkEnd !== -1) {
-            sendToClientThink(streamBuffer.substring(0, thinkEnd));
-            isThinking = false;
-            streamState.dbMessage += '\n</think>\n';
-            streamBuffer = streamBuffer.substring(thinkEnd + 8);
-            continue;
-          }
-        }
-
-        const tagStart = streamBuffer.indexOf('[');
-        if (tagStart !== -1) {
-          const tagEnd = streamBuffer.indexOf(']', tagStart);
-          if (tagEnd !== -1) {
-            const tagContent = streamBuffer.substring(tagStart, tagEnd + 1);
-            if (/^\[\s*(IMAGE|SEARCH|IMAGES?)\s*:/i.test(tagContent)) {
-              const beforeTag = streamBuffer.substring(0, tagStart);
-              if (isThinking) sendToClientThink(beforeTag);
-              else sendToClientFinal(beforeTag);
-
-              await handleTag(tagContent, allowSearch);
-
-              streamBuffer = streamBuffer.substring(tagEnd + 1);
-              if (allowSearch && /^\[\s*SEARCH\s*:/i.test(tagContent)) {
-                abortOuter = true;
-              }
-              continue;
-            } else {
-              const beforeBracket = streamBuffer.substring(0, tagStart + 1);
-              if (isThinking) sendToClientThink(beforeBracket);
-              else sendToClientFinal(beforeBracket);
-              streamBuffer = streamBuffer.substring(tagStart + 1);
-              continue;
-            }
-          } else {
-             if (streamBuffer.length - tagStart > 2500) {
-                 const beforeBracket = streamBuffer.substring(0, tagStart + 1);
-                 if (isThinking) sendToClientThink(beforeBracket);
-                 else sendToClientFinal(beforeBracket);
-                 streamBuffer = streamBuffer.substring(tagStart + 1);
-                 continue;
-             }
-             break;
-          }
-        }
-
-        let safeLen = streamBuffer.length - 10;
-        if (safeLen > 0) {
-          const lastLt = streamBuffer.lastIndexOf('<', safeLen);
-          const lastSq = streamBuffer.lastIndexOf('[', safeLen);
-          const maxLast = Math.max(lastLt, lastSq);
-          if (maxLast !== -1) safeLen = maxLast;
-          if (safeLen > 0) {
-            const chunkToFlush = streamBuffer.substring(0, safeLen);
-            if (isThinking) sendToClientThink(chunkToFlush);
-            else sendToClientFinal(chunkToFlush);
-            streamBuffer = streamBuffer.substring(safeLen);
-          }
-        }
-        break;
-      }
-      return abortOuter;
-    }
+    const mainProcessor = createProcessor(true);
 
     if (!aiRaw && !signal.aborted) {
       res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
@@ -851,7 +871,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                   const dataStr = cleanLine.substring(5).trim();
                   const data = JSON.parse(dataStr);
                   if (data.response !== undefined && data.response !== null) {
-                    const shouldAbort = await processStr(String(data.response), true);
+                    const shouldAbort = await mainProcessor.processStr(String(data.response));
                     if (shouldAbort) {
                       streamAborted = true;
                       try { await reader.cancel(); } catch (err) {}
@@ -871,15 +891,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     }
 
-    if (streamBuffer.length > 0 && !signal.aborted) {
-      if (isThinking) {
-        sendToClientThink(streamBuffer);
-        streamState.dbMessage += streamBuffer + '\n</think>';
-      } else {
-        sendToClientFinal(streamBuffer);
-      }
-      streamBuffer = '';
-    }
+    mainProcessor.flush();
 
     try {
       if (streamState.dbMessage.trim() !== '') {
