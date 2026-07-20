@@ -447,12 +447,12 @@ async function performSearch(query) {
     if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
     
     if (data.answer) {
-      text += data.answer + '\n';
+      text += data.answer.trim() + '\n';
     }
     
     for (const r of data.results) {
       if (r.url) foundLinks.push(r.url);
-      text += (r.url || 'Lyen pa disponib') + '\n' + r.content + '\n';
+      text += (r.url ? r.url + '\n' : '') + r.content + '\n';
     }
     return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
   } catch (e) {
@@ -709,8 +709,10 @@ app.post('/ai', requireAuth, async (req, res) => {
 
                   this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
                   if (allowSearchFlag && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
-                    abortOuter = true;
-                    break;
+                    if (currentModel === '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b') {
+                      abortOuter = true;
+                      break;
+                    }
                   }
                   continue;
                 } else {
@@ -779,8 +781,8 @@ app.post('/ai', requireAuth, async (req, res) => {
         clearInterval(keepAliveImg);
         if (signal.aborted) return;
         const dbTag = `[IMAGES: ${imageIndex}]`;
-        if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n${imgUrl}\n` });
-        sendToClientFinal(imgUrl ? `\n${imgUrl}\n` : '');
+        if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
+        sendToClientFinal(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         if (!allowSearch) return;
         const query = tSrcMatch[1].trim();
@@ -860,11 +862,11 @@ app.post('/ai', requireAuth, async (req, res) => {
         let foundUrl = contextAttMap.get(rawTag);
         if (!foundUrl && tRefMatch[1]) {
           const idx = parseInt(tRefMatch[2], 10) - 1;
-          if (allImages && allImages[idx]) foundUrl = `\n${allImages[idx]}\n`;
+          if (allImages && allImages[idx]) foundUrl = `\n\n${allImages[idx]}\n\n`;
         }
         if (foundUrl) {
           let cleanUrl = foundUrl;
-          if (!cleanUrl.startsWith('\n')) cleanUrl = `\n${cleanUrl}\n`;
+          if (!cleanUrl.startsWith('\n')) cleanUrl = `\n\n${cleanUrl}\n\n`;
           sendToClientFinal(cleanUrl);
         } else {
           sendToClientFinal(tag);
