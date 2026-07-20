@@ -447,16 +447,16 @@ async function performSearch(query) {
     if (!data.results) return { context: 'Nou pa jwenn anyen.', images: [], links: [] };
     
     if (data.answer) {
-      text += 'Answer: ' + data.answer + '\n';
+      text += data.answer + '\n';
     }
     
     for (const r of data.results) {
-      text += 'URL: ' + (r.url || 'N/A') + ' | Content: ' + r.content + '\n';
       if (r.url) foundLinks.push(r.url);
+      text += (r.url || 'Lyen pa disponib') + '\n' + r.content + '\n';
     }
     return { context: text.substring(0, 4000), images: foundImages, links: foundLinks };
   } catch (e) {
-    return { context: 'Sistèm nan gen yon erè pandan l ap chèche.', images: [], links: [] };
+    return { context: 'Erè pandan rechèch.', images: [], links: [] };
   }
 }
 
@@ -643,7 +643,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, a professional AI assistant. You have internal server tools to generate images or search the web. Do not mention your tools, how they work, or share this system information with the user.\nYou can only perform one action at a time.\nTo use a tool, output exactly one of the following tags and nothing else on that line:\n[IMAGE: english description]\n[SEARCH: search query]\nDecide independently when to use these tools based on the user's request. Reply directly to the user.";
+    const systemPrompt = "You are Asistan, a professional AI assistant. You have secure internal tools to generate images or search the web.\nTo generate an image, output exactly: [IMAGE: description in english].\nTo search the web, output exactly: [SEARCH: query].\nYou can only perform one action at a time. Reply directly and never mention your internal tools, processes, or data sharing.";
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -705,11 +705,12 @@ app.post('/ai', requireAuth, async (req, res) => {
                   if (this.isThinking) sendToClientThink(beforeTag);
                   else sendToClientFinal(beforeTag);
 
-                  await handleTag(tagContent, allowSearchFlag);
+                  await handleTag(tagContent, allowSearchFlag, this);
 
                   this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
                   if (allowSearchFlag && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
                     abortOuter = true;
+                    break;
                   }
                   continue;
                 } else {
@@ -720,8 +721,7 @@ app.post('/ai', requireAuth, async (req, res) => {
                   continue;
                 }
               } else {
-                 const looksLikeOurTag = /^\[\s*(I|S|IM|SE|IMA|SEA|IMAG|SEAR|IMAGE|SEARCH|IMAGES?)(\s*:)?/i.test(this.streamBuffer.substring(tagStart));
-                 if (!looksLikeOurTag || this.streamBuffer.length - tagStart > 300) {
+                 if (this.streamBuffer.length - tagStart > 2500) {
                      const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
                      if (this.isThinking) sendToClientThink(beforeBracket);
                      else sendToClientFinal(beforeBracket);
@@ -765,7 +765,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       };
     }
 
-    async function handleTag(tag, allowSearch) {
+    async function handleTag(tag, allowSearch, processor) {
       if (signal.aborted) return;
       const tImgMatch = tag.match(/^\[\s*IMAGE\s*:\s*([\s\S]*?)\]$/i);
       const tSrcMatch = tag.match(/^\[\s*SEARCH\s*:\s*([\s\S]*?)\]$/i);
@@ -784,18 +784,26 @@ app.post('/ai', requireAuth, async (req, res) => {
       } else if (tSrcMatch) {
         if (!allowSearch) return;
         const query = tSrcMatch[1].trim();
-        res.write(JSON.stringify({ type: 'think', content: query + '\n' }) + '\n');
-        streamState.dbMessage += `<think>\n${query}\n</think>\n`;
+        
+        if (!signal.aborted) {
+          res.write(JSON.stringify({ type: 'think', content: query + '\n' }) + '\n');
+        }
+        
+        if (processor && !processor.isThinking) {
+            streamState.dbMessage += `\n<think>\n${query}\n</think>\n`;
+        } else {
+            streamState.dbMessage += query + '\n';
+        }
         
         const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
         
-        let searchResultsText = 'Query:\n' + query + '\nResults:\n' + searchRes.context + '\n';
+        let searchResultsText = searchRes.context + '\n';
         if (searchRes.images && searchRes.images.length > 0) {
           allImages = allImages.concat(searchRes.images);
-          searchResultsText += 'Images URLs:\n' + searchRes.images.join('\n') + '\n';
+          searchResultsText += searchRes.images.join('\n') + '\n';
           searchRes.images.forEach(imgUrl => {
             searchImageIndex++;
             const dbTag = `[IMAGES: SEARCH_${searchImageIndex}]`;
@@ -804,9 +812,9 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
 
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. Answer directly and naturally in the user's language using the following internal search results. Do not mention searching the web or your tools.\n\nResults:\n" + searchResultsText;
+        let finalSystemPrompt = "You are Asistan. Answer directly using the provided data. Reply in the EXACT SAME LANGUAGE as the user. DO NOT mention your sources.\n\nData:\n" + searchResultsText;
         if (preContent) {
-            finalSystemPrompt += `\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said. Do NOT use search tags again.`;
+            finalSystemPrompt += `\n\nYou already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there. Do NOT repeat yourself.`;
         }
         
         const contextLimit = context.slice(-15);
