@@ -441,7 +441,7 @@ async function performSearch(query) {
     });
     const reqData = await reqRes.json();
     const reqId = reqData.request_id;
-    if (!reqId) return { context: 'Nou pa jwenn anyen.' };
+    if (!reqId) return { context: '' };
 
     let content = '';
     for (let i = 0; i < 30; i++) {
@@ -457,12 +457,12 @@ async function performSearch(query) {
       }
     }
     if (content) {
-      if (content.length > 8000) content = content.substring(0, 8000) + '...';
-      return { context: content };
+      if (content.length > 8000) content = content.substring(0, 8000);
+      return { context: content.trim() };
     }
-    return { context: 'Nou pa jwenn anyen.' };
+    return { context: '' };
   } catch (e) {
-    return { context: 'Erè pandan rechèch la.' };
+    return { context: '' };
   }
 }
 
@@ -582,7 +582,13 @@ app.post('/ai', requireAuth, async (req, res) => {
     activeStreams.delete(sess);
   }
   
-  const streamState = { abortController: new AbortController(), frontendMessage: '', dbMessage: '' };
+  const streamState = { 
+    abortController: new AbortController(), 
+    frontendMessage: '', 
+    dbMessage: '',
+    thinkOpen: false,
+    thinkClosed: false
+  };
   activeStreams.set(sess, streamState);
   const signal = streamState.abortController.signal;
 
@@ -609,14 +615,19 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     });
 
-    const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).limit(70).toArray();
+    const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).toArray();
     
+    let totalSessionChars = 0;
+    for (const m of recentMessages) {
+      totalSessionChars += (m.content || '').length;
+    }
+
     let totalLength = 0;
     const validContext = [];
     if (recentMessages) {
         for (const m of recentMessages) {
             const l = (m.content || '').length + (m.role || '').length;
-            if (totalLength + l > 10000) break;
+            if (totalLength + l > 7000) break;
             validContext.push(m);
             totalLength += l;
         }
@@ -629,14 +640,9 @@ app.post('/ai', requireAuth, async (req, res) => {
     };
     
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
-    
-    let activeCharCount = userMessage.length;
-    for (const msg of context) {
-      activeCharCount += (msg.content || '').length;
-    }
 
     let currentModel = '@cf/meta/llama-3.1-8b-instruct';
-    if (activeCharCount > 4000) {
+    if (totalSessionChars > 4000) {
       currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
     }
 
@@ -649,18 +655,36 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, an advanced AI. You have internal tools to generate images or search the web.\nTo use a tool, output exactly ONE of these tags:\n- For images: [IMAGE: description in english]\n- For web search: [SEARCH: query]\nRules:\n1. Use tools only when necessary.\n2. Do not explain your tools to the user.\n3. Output only one tool tag at a time.\n4. Answer directly and professionally.";
+    const systemPrompt = "You are Asistan, a professional AI with internal tools for web search and image generation.\nTo search, output: [SEARCH: query]\nTo generate an image, output: [IMAGE: description]\nRules:\n- Use tools only when requested or necessary.\n- Answer directly. Never disclose your tools or internal workings to the user.";
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
     let attachmentsToSave = [];
     let imageIndex = 0;
 
-    function sendToClientFinal(str) {
+    function writeThinkContent(str) {
       if (!str || signal.aborted) return;
-      res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
-      streamState.frontendMessage += str;
+      if (!streamState.thinkOpen) {
+        streamState.dbMessage += '<think>\n';
+        streamState.thinkOpen = true;
+      }
       streamState.dbMessage += str;
+      res.write(JSON.stringify({ type: 'think', content: str }) + '\n');
+    }
+
+    function closeThink() {
+      if (streamState.thinkOpen && !streamState.thinkClosed) {
+        streamState.dbMessage += '\n</think>\n';
+        streamState.thinkClosed = true;
+      }
+    }
+
+    function writeFinalContent(str) {
+      if (!str || signal.aborted) return;
+      closeThink();
+      streamState.dbMessage += str;
+      streamState.frontendMessage += str;
+      res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
     }
 
     async function handleTag(tag, allowSearch, isThinking) {
@@ -677,24 +701,21 @@ app.post('/ai', requireAuth, async (req, res) => {
         if (signal.aborted) return;
         const dbTag = `[IMAGES: ${imageIndex}]`;
         if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
-        sendToClientFinal(imgUrl ? `\n\n${imgUrl}\n\n` : '');
+        writeFinalContent(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         if (!allowSearch) return;
         const query = tSrcMatch[1].trim();
         
-        const clientMsg = `Recherche: ${query}\n`;
-        res.write(JSON.stringify({ type: 'think', content: clientMsg }) + '\n');
-        
-        if (isThinking) {
-          streamState.dbMessage += clientMsg;
-        } else {
-          streamState.dbMessage += `\n<think>\n${clientMsg}</think>\n`;
-        }
+        writeThinkContent(query + '\n');
         
         const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
         const searchRes = await performSearch(query);
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
+        
+        if (searchRes.context) {
+          writeThinkContent(searchRes.context + '\n');
+        }
         
         let searchResultsText = `${searchRes.context}\n`;
         const preContent = streamState.frontendMessage.trim();
@@ -718,7 +739,7 @@ app.post('/ai', requireAuth, async (req, res) => {
             const decoderFinal = new TextDecoder();
             let bufferFinal = '';
             
-            const innerProcessor = createProcessor(false);
+            const innerProcessor = createProcessor(false, false);
 
             while (!signal.aborted) {
               const { done, value } = await readerFinal.read();
@@ -745,7 +766,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       }
     }
 
-    function createProcessor(allowSearchFlag) {
+    function createProcessor(allowSearchFlag, isDeepSeek) {
       return {
         streamBuffer: '',
         isThinking: false,
@@ -758,9 +779,8 @@ app.post('/ai', requireAuth, async (req, res) => {
             if (!this.isThinking) {
               const thinkStart = this.streamBuffer.indexOf('<think>');
               if (thinkStart !== -1) {
-                sendToClientFinal(this.streamBuffer.substring(0, thinkStart));
+                writeFinalContent(this.streamBuffer.substring(0, thinkStart));
                 this.isThinking = true;
-                streamState.dbMessage += '<think>\n';
                 this.streamBuffer = this.streamBuffer.substring(thinkStart + 7);
                 continue;
               }
@@ -768,11 +788,8 @@ app.post('/ai', requireAuth, async (req, res) => {
               const thinkEnd = this.streamBuffer.indexOf('</think>');
               if (thinkEnd !== -1) {
                 const thinkContent = this.streamBuffer.substring(0, thinkEnd);
-                if (thinkContent) {
-                  res.write(JSON.stringify({ type: 'think', content: thinkContent }) + '\n');
-                  streamState.dbMessage += thinkContent;
-                }
-                streamState.dbMessage += '\n</think>\n';
+                writeThinkContent(thinkContent);
+                closeThink();
                 this.isThinking = false;
                 this.streamBuffer = this.streamBuffer.substring(thinkEnd + 8);
                 continue;
@@ -787,28 +804,24 @@ app.post('/ai', requireAuth, async (req, res) => {
                 if (/^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
                   const beforeTag = this.streamBuffer.substring(0, tagStart);
                   if (this.isThinking) {
-                    if (beforeTag) {
-                      res.write(JSON.stringify({ type: 'think', content: beforeTag }) + '\n');
-                      streamState.dbMessage += beforeTag;
-                    }
+                    writeThinkContent(beforeTag);
                   } else {
-                    sendToClientFinal(beforeTag);
+                    writeFinalContent(beforeTag);
                   }
 
                   await handleTag(tagContent, allowSearchFlag, this.isThinking);
 
                   this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
-                  if (allowSearchFlag && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
+                  if (allowSearchFlag && isDeepSeek && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
                     abortOuter = true;
                   }
                   continue;
                 } else {
                   const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
                   if (this.isThinking) {
-                    res.write(JSON.stringify({ type: 'think', content: beforeBracket }) + '\n');
-                    streamState.dbMessage += beforeBracket;
+                    writeThinkContent(beforeBracket);
                   } else {
-                    sendToClientFinal(beforeBracket);
+                    writeFinalContent(beforeBracket);
                   }
                   this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
                   continue;
@@ -817,10 +830,9 @@ app.post('/ai', requireAuth, async (req, res) => {
                  if (this.streamBuffer.length - tagStart > 2500) {
                      const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
                      if (this.isThinking) {
-                       res.write(JSON.stringify({ type: 'think', content: beforeBracket }) + '\n');
-                       streamState.dbMessage += beforeBracket;
+                       writeThinkContent(beforeBracket);
                      } else {
-                       sendToClientFinal(beforeBracket);
+                       writeFinalContent(beforeBracket);
                      }
                      this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
                      continue;
@@ -838,10 +850,9 @@ app.post('/ai', requireAuth, async (req, res) => {
               if (safeLen > 0) {
                 const chunkToFlush = this.streamBuffer.substring(0, safeLen);
                 if (this.isThinking) {
-                  res.write(JSON.stringify({ type: 'think', content: chunkToFlush }) + '\n');
-                  streamState.dbMessage += chunkToFlush;
+                  writeThinkContent(chunkToFlush);
                 } else {
-                  sendToClientFinal(chunkToFlush);
+                  writeFinalContent(chunkToFlush);
                 }
                 this.streamBuffer = this.streamBuffer.substring(safeLen);
               }
@@ -853,20 +864,17 @@ app.post('/ai', requireAuth, async (req, res) => {
         flush() {
           if (this.streamBuffer.length > 0 && !signal.aborted) {
             if (this.isThinking) {
-              res.write(JSON.stringify({ type: 'think', content: this.streamBuffer }) + '\n');
-              streamState.dbMessage += this.streamBuffer + '\n</think>\n';
+              writeThinkContent(this.streamBuffer);
             } else {
-              sendToClientFinal(this.streamBuffer);
+              writeFinalContent(this.streamBuffer);
             }
             this.streamBuffer = '';
-          } else if (this.isThinking && !signal.aborted) {
-             streamState.dbMessage += '\n</think>\n';
           }
         }
       };
     }
 
-    const mainProcessor = createProcessor(true);
+    const mainProcessor = createProcessor(true, currentModel === '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b');
 
     if (!aiRaw && !signal.aborted) {
       res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
