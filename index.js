@@ -20,6 +20,11 @@ const CLOUDCONVERT_KEYS = Object.keys(process.env)
   .map(key => process.env[key])
   .filter(k => typeof k === 'string' && k.trim().length > 0);
 
+const TAVILY_KEYS = Object.keys(process.env)
+  .filter(key => key.startsWith('TAVILY_KEY'))
+  .map(key => process.env[key])
+  .filter(k => typeof k === 'string' && k.trim().length > 0);
+
 const CF_AI_CREDENTIALS = [];
 if (process.env.CF_ACCOUNT_ID && process.env.CF_AI_TOKEN) {
   CF_AI_CREDENTIALS.push({ account: process.env.CF_ACCOUNT_ID, token: process.env.CF_AI_TOKEN });
@@ -56,7 +61,8 @@ async function getDb() {
     }
     await db.command({ ping: 1 }, { maxTimeMS: 2000 });
   } catch (e) {
-    try { await mongoClient.close(); } catch (err) {}
+    console.error(e.message);
+    try { await mongoClient.close(); } catch (err) { console.error(err.message); }
     await mongoClient.connect();
     db = mongoClient.db('chatdb');
   }
@@ -68,6 +74,7 @@ const FFMPEG_AVAILABLE = (() => {
     const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
     return !result.error && result.status === 0;
   } catch (e) {
+    console.error(e.message);
     return false;
   }
 })();
@@ -102,6 +109,7 @@ async function uploadToBref(buffer, filename) {
     const data = await res.json();
     return data.url;
   } catch (e) {
+    console.error(e.message);
     throw e;
   }
 }
@@ -322,6 +330,7 @@ async function serveS3RawFile(req, res, key, filename) {
     if (!s3Response.Body) return res.end();
     s3Response.Body.pipe(res);
   } catch (e) {
+    console.error(e.message);
     sendUnknown(req, res);
   }
 }
@@ -329,8 +338,8 @@ async function serveS3RawFile(req, res, key, filename) {
 function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
   const stop = () => {
     abort();
-    try { if (inputStream.destroy) inputStream.destroy(); } catch (e) {}
-    try { if (ffmpeg.stdin) ffmpeg.stdin.destroy(); } catch (e) {}
+    try { if (inputStream.destroy) inputStream.destroy(); } catch (e) { console.error(e.message); }
+    try { if (ffmpeg.stdin) ffmpeg.stdin.destroy(); } catch (e) { console.error(e.message); }
   };
   res.on('close', stop);
   res.on('finish', stop);
@@ -346,7 +355,7 @@ function transcodeVideoStreamToMp4(inputStream, res) {
   res.setHeader('Content-Type', 'video/mp4');
   res.setHeader('Accept-Ranges', 'none');
   const ffmpeg = spawn('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
-  const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) {} };
+  const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) { console.error(e.message); } };
   reqLikeCleanup(inputStream, ffmpeg, res, abort);
   inputStream.pipe(ffmpeg.stdin);
   ffmpeg.stdout.pipe(res);
@@ -372,6 +381,7 @@ async function serveS3VideoTranscode(req, res, key) {
     if (!s3Response.Body) return sendUnknown(req, res);
     transcodeVideoStreamToMp4(s3Response.Body, res);
   } catch (e) {
+    console.error(e.message);
     sendUnknown(req, res);
   }
 }
@@ -411,7 +421,9 @@ async function fetchAIFallback(model, bodyPayload, signal) {
       
       const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cred.account}/ai/run/${model}`, fetchOptions);
       if (res.ok) return res;
-    } catch (e) {}
+    } catch (e) {
+      console.error(e.message);
+    }
   }
   return null;
 }
@@ -428,48 +440,15 @@ async function processAndUploadImage(prompt) {
     const filename = `TF-${randomNum}.png`;
     return await uploadToBref(Buffer.from(bytes), filename);
   } catch (e) {
+    console.error(e.message);
     return '';
-  }
-}
-
-async function performSearch(query) {
-  try {
-    const reqRes = await fetch('https://api.tavily.com/research', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.TAVILY_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: query, model: 'auto', search_depth: 'advanced' })
-    });
-    const reqData = await reqRes.json();
-    const reqId = reqData.request_id;
-    if (!reqId) return { context: '' };
-
-    let content = '';
-    for (let i = 0; i < 30; i++) {
-      await new Promise(r => setTimeout(r, 2000));
-      const chkRes = await fetch(`https://api.tavily.com/research/${reqId}`, {
-        headers: { 'Authorization': `Bearer ${process.env.TAVILY_KEY}` }
-      });
-      if (!chkRes.ok) continue;
-      const chkData = await chkRes.json();
-      if (chkData.status === 'completed') {
-        content = chkData.content || '';
-        break;
-      }
-    }
-    if (content) {
-      if (content.length > 8000) content = content.substring(0, 8000);
-      return { context: content.trim() };
-    }
-    return { context: '' };
-  } catch (e) {
-    return { context: '' };
   }
 }
 
 app.post('/ai/clear', requireAuth, async (req, res) => {
   const sess = req.body.session_id || 'global';
   if (activeStreams.has(sess)) {
-    try { activeStreams.get(sess).abortController.abort(); } catch (e) {}
+    try { activeStreams.get(sess).abortController.abort(); } catch (e) { console.error(e.message); }
     activeStreams.delete(sess);
   }
   try {
@@ -578,7 +557,7 @@ app.post('/ai', requireAuth, async (req, res) => {
   }
 
   if (activeStreams.has(sess)) {
-    try { activeStreams.get(sess).abortController.abort(); } catch (e) {}
+    try { activeStreams.get(sess).abortController.abort(); } catch (e) { console.error(e.message); }
     activeStreams.delete(sess);
   }
   
@@ -605,23 +584,18 @@ app.post('/ai', requireAuth, async (req, res) => {
 
     req.on('close', async () => {
       if (!responseFinished) {
-        try { streamState.abortController.abort(); } catch (e) {}
+        try { streamState.abortController.abort(); } catch (e) { console.error(e.message); }
         if (activeStreams.get(sess) === streamState) activeStreams.delete(sess);
         try {
           const dbInstance = await getDb();
           await dbInstance.collection('messages').deleteOne({ id: userMsgId });
           await dbInstance.collection('attachments').deleteMany({ message_id: userMsgId });
-        } catch (e) {}
+        } catch (e) { console.error(e.message); }
       }
     });
 
     const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).toArray();
     
-    let totalSessionChars = 0;
-    for (const m of recentMessages) {
-      totalSessionChars += (m.content || '').length;
-    }
-
     let totalLength = 0;
     const validContext = [];
     if (recentMessages) {
@@ -642,7 +616,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
 
     let currentModel = '@cf/meta/llama-3.1-8b-instruct';
-    if (totalSessionChars > 4000) {
+    if (totalLength > 4000) {
       currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
     }
 
@@ -655,7 +629,25 @@ app.post('/ai', requireAuth, async (req, res) => {
       });
     }
 
-    const systemPrompt = "You are Asistan, a professional AI with internal tools for web search and image generation.\nTo search, output: [SEARCH: query]\nTo generate an image, output: [IMAGE: description]\nRules:\n- Use tools only when requested or necessary.\n- Answer directly. Never disclose your tools or internal workings to the user.";
+    let attachmentContext = "";
+    if (contextAttMap.size > 0) {
+        attachmentContext = "\n\nAttached files context:\n";
+        contextAttMap.forEach((url, placeholder) => {
+            attachmentContext += `${placeholder} -> ${url}\n`;
+        });
+    }
+
+    const systemPrompt = "You are Asistan, an advanced AI. Answer the user request directly.\n" +
+    "Priority 1: Follow user intent.\n" +
+    "Priority 2: Maintain context.\n" +
+    "Priority 3: Use internal tools when lacking information.\n\n" +
+    "TOOL: Web Search\n" +
+    "If you need facts, output exactly this JSON format:\n" +
+    "[SEARCH: {\"endpoint\": \"/search\" or \"/research\", \"input\": \"your specific question\", \"model\": \"pro\", \"search_depth\": \"advanced\", \"output_length\": \"long\"}]\n" +
+    "Use /search for quick facts, /research for deep topics. Use 'pro' model.\n\n" +
+    "TOOL: Image\n" +
+    "Output: [IMAGE: description]\n\n" +
+    "Rules: Do not mention tools to the user." + attachmentContext;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -695,7 +687,7 @@ app.post('/ai', requireAuth, async (req, res) => {
       if (tImgMatch) {
         const prompt = tImgMatch[1].trim();
         imageIndex++;
-        const keepAliveImg = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 1000);
+        const keepAliveImg = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '••••' }) + '\n'); } catch (e) { console.error(e.message); } }, 1000);
         const imgUrl = await processAndUploadImage(prompt);
         clearInterval(keepAliveImg);
         if (signal.aborted) return;
@@ -704,31 +696,115 @@ app.post('/ai', requireAuth, async (req, res) => {
         writeFinalContent(imgUrl ? `\n\n${imgUrl}\n\n` : '');
       } else if (tSrcMatch) {
         if (!allowSearch) return;
-        const query = tSrcMatch[1].trim();
+        let queryData = tSrcMatch[1].trim();
+        let searchPayload = {};
         
-        writeThinkContent(query + '\n');
+        try {
+          searchPayload = JSON.parse(queryData);
+          if (!searchPayload.input) searchPayload.input = queryData;
+        } catch (e) {
+          searchPayload = { endpoint: '/research', input: queryData, model: 'pro', search_depth: 'advanced', output_length: 'long' };
+        }
         
-        const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '' }) + '\n'); } catch (e) {} }, 1000);
-        const searchRes = await performSearch(query);
+        writeThinkContent(`\nRecherche en cours: ${searchPayload.input}\n\n`);
+        
+        const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '••••' }) + '\n'); } catch (e) { console.error(e.message); } }, 1000);
+        
+        let fullSearchContext = '';
+        let searchSuccess = false;
+
+        for (const tKey of TAVILY_KEYS) {
+            try {
+                const ep = searchPayload.endpoint === '/search' ? '/search' : '/research';
+                const sRes = await fetch(`https://api.tavily.com${ep}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${tKey}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: searchPayload.input,
+                        model: searchPayload.model || 'pro',
+                        search_depth: searchPayload.search_depth || 'advanced',
+                        stream: true,
+                        include_sources: false,
+                        output_length: searchPayload.output_length || 'long'
+                    })
+                });
+                
+                if (!sRes.ok) continue;
+                
+                const sReader = sRes.body.getReader();
+                const sDecoder = new TextDecoder();
+                let sBuffer = '';
+                let receivedAny = false;
+                
+                while (!signal.aborted) {
+                    const { done, value } = await sReader.read();
+                    if (done) break;
+                    sBuffer += sDecoder.decode(value, { stream: true });
+                    const sLines = sBuffer.split('\n');
+                    sBuffer = sLines.pop() || '';
+                    
+                    for (const sLine of sLines) {
+                        const cLine = sLine.trim();
+                        if (cLine.startsWith('data:') && cLine !== 'data: [DONE]') {
+                            try {
+                                const dStr = cLine.substring(5).trim();
+                                const dObj = JSON.parse(dStr);
+                                let chunkContent = '';
+                                if (dObj.choices && dObj.choices[0] && dObj.choices[0].delta && dObj.choices[0].delta.content) {
+                                    chunkContent = dObj.choices[0].delta.content;
+                                } else if (dObj.content) {
+                                     chunkContent = dObj.content;
+                                }
+                                
+                                if (chunkContent) {
+                                    fullSearchContext += chunkContent;
+                                    writeThinkContent(chunkContent);
+                                    receivedAny = true;
+                                }
+                            } catch (errParse) {
+                                console.error(errParse.message);
+                            }
+                        }
+                    }
+                }
+                
+                if (receivedAny) {
+                    searchSuccess = true;
+                    break;
+                }
+            } catch (e) {
+                console.error(e.message);
+            }
+        }
+        
         clearInterval(keepAliveSrc);
         if (signal.aborted) return;
         
-        if (searchRes.context) {
-          writeThinkContent(searchRes.context + '\n');
+        if (!searchSuccess) {
+            writeThinkContent('\n\nRecherche échouée ou aucun résultat utile.\n');
+        } else {
+            writeThinkContent('\n\nRecherche terminée.\n');
         }
         
-        let searchResultsText = `${searchRes.context}\n`;
+        let searchResultsText = fullSearchContext.trim();
+        if (searchResultsText.length > 8000) searchResultsText = searchResultsText.substring(0, 8000);
+        
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. Answer directly based on the search results below. Reply in the exact same language as the user. Do not mention you performed a search. Do not use search tags again.\n\nSearch Results:\n" + searchResultsText;
+        let finalSystemPrompt = "You are Asistan. You performed a web search. Here are the facts found:\n" +
+        "--- START SEARCH RESULTS ---\n" + searchResultsText + "\n--- END SEARCH RESULTS ---\n\n" +
+        "INSTRUCTIONS:\n" +
+        "1. Answer directly based on the search results.\n" +
+        "2. Reply in the EXACT same language as the user.\n" +
+        "3. DO NOT mention that you performed a search or used a tool.\n" +
+        "4. Resolve any contradictions logically.\n" +
+        "5. Do NOT output [SEARCH: ...] tags again.";
         
         if (preContent) {
-          finalSystemPrompt += `\n\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said.`;
+          finalSystemPrompt += `\n\nImportant: You had already started responding to the user with the following text:\n"""\n${preContent}\n"""\nContinue your response DIRECTLY from where you left off. Do not repeat what you already said.`;
         }
-        
-        const contextLimit = context.slice(-15);
 
         try {
-          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...contextLimit], max_tokens: 3000, stream: true }, signal);
+          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
           if (!aiFinalRaw) {
             if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
@@ -756,13 +832,13 @@ app.post('/ai', requireAuth, async (req, res) => {
                     if (dataFinal.response !== undefined && dataFinal.response !== null) {
                       await innerProcessor.processStr(String(dataFinal.response));
                     }
-                  } catch (e) {}
+                  } catch (e) { console.error(e.message); }
                 }
               }
             }
             innerProcessor.flush();
           }
-        } catch (e) {}
+        } catch (e) { console.error(e.message); }
       }
     }
 
@@ -902,11 +978,11 @@ app.post('/ai', requireAuth, async (req, res) => {
                     const shouldAbort = await mainProcessor.processStr(String(data.response));
                     if (shouldAbort) {
                       streamAborted = true;
-                      try { await reader.cancel(); } catch (err) {}
+                      try { await reader.cancel(); } catch (err) { console.error(err.message); }
                       break;
                     }
                   }
-                } catch (e) {}
+                } catch (e) { console.error(e.message); }
               }
             }
             if (streamAborted) break;
@@ -935,13 +1011,14 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
       }
       responseFinished = true;
-    } catch (e) {}
+    } catch (e) { console.error(e.message); }
     
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
     res.end();
   } catch (e) {
+    console.error(e.message);
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
@@ -1022,7 +1099,7 @@ app.post('/calcul', requireAuth, async (req, res) => {
               const strChunk = String(data.response);
               if (strChunk) res.write(strChunk);
             }
-          } catch (e) {}
+          } catch (e) { console.error(e.message); }
         }
       }
     }
@@ -1268,15 +1345,15 @@ app.post('/resize', requireAuth, async (req, res) => {
       let responded = false;
       
       const timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch(e) {}
+        try { child.kill('SIGKILL'); } catch(e) { console.error(e.message); }
       }, 60000);
 
       child.on('error', (err) => {
         clearTimeout(timer);
         if (responded) return;
         responded = true;
-        try { fs.unlinkSync(tmpImg); } catch (e) {}
-        try { fs.unlinkSync(outImg); } catch (e) {}
+        try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
+        try { fs.unlinkSync(outImg); } catch (e) { console.error(e.message); }
         res.status(500).json({ error: "Erè redimansyon" });
       });
 
@@ -1294,8 +1371,8 @@ app.post('/resize', requireAuth, async (req, res) => {
         } catch (e) {
           res.status(500).json({ error: "Erè redimansyon" });
         } finally {
-          try { fs.unlinkSync(tmpImg); } catch (e) {}
-          try { fs.unlinkSync(outImg); } catch (e) {}
+          try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
+          try { fs.unlinkSync(outImg); } catch (e) { console.error(e.message); }
         }
       });
       return;
@@ -1309,7 +1386,7 @@ app.post('/resize', requireAuth, async (req, res) => {
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${s}:${s}`, '-y', outImg], { stdio: 'ignore' });
       
       const timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch(e) {}
+        try { child.kill('SIGKILL'); } catch(e) { console.error(e.message); }
       }, 60000);
 
       child.on('error', (err) => {
@@ -1317,7 +1394,7 @@ app.post('/resize', requireAuth, async (req, res) => {
         completed++;
         if (completed === sizes.length && !responded) {
           responded = true;
-          try { fs.unlinkSync(tmpImg); } catch (e) {}
+          try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
           if (taskId) tasks.set(taskId, { step: 'fini', urls });
           res.json({ urls });
         }
@@ -1330,12 +1407,12 @@ app.post('/resize', requireAuth, async (req, res) => {
             const outBuf = fs.readFileSync(outImg);
             urls.push(await uploadToBref(outBuf, `resized-${s}.png`));
           }
-        } catch (e) {}
-        try { fs.unlinkSync(outImg); } catch (e) {}
+        } catch (e) { console.error(e.message); }
+        try { fs.unlinkSync(outImg); } catch (e) { console.error(e.message); }
         completed++;
         if (completed === sizes.length && !responded) {
           responded = true;
-          try { fs.unlinkSync(tmpImg); } catch (e) {}
+          try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
           if (taskId) tasks.set(taskId, { step: 'fini', urls });
           res.json({ urls });
         }
