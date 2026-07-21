@@ -772,7 +772,7 @@ Date et heure actuelles : ${getFormattedDate()}
 Utilise cette référence temporelle comme source de vérité pour toutes les requêtes dépendantes du temps.
 </system_directives>`;
 
-    const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
+    const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, temperature: 0.6, stream: true }, signal);
 
     let attachmentsToSave = [];
 
@@ -854,7 +854,7 @@ if (preContent) {
     finalSystemPrompt += `\n\nBrouillon de réponse précédent :\n${preContent}\nPoursuis naturellement uniquement si cela est cohérent avec les informations vérifiées ci-dessus.`;
 }
         try {
-          const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
+          const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, temperature: 0.6, stream: true }, signal);
           if (!aiFinalRaw) {
             if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
