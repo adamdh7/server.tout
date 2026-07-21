@@ -439,15 +439,11 @@ async function processAndUploadImage(prompt) {
 }
 
 async function performToolSearch(toolData, signal, writeThinkContent) {
-  const endpoint = (toolData.name === 'research' || toolData.action === 'research') ? 'research' : 'search';
-  const bodyPayload = {
-    model: 'auto',
-    stream: true,
-    include_sources: true,
-    input: toolData.input || toolData.query,
-    search_depth: toolData.search_depth || 'basic',
-    output_length: toolData.output_length || 'medium'
-  };
+  const isResearch = (toolData.name === 'research' || toolData.action === 'research');
+  const endpoint = isResearch ? 'research' : 'search';
+  const query = toolData.input || toolData.query;
+  
+  if (!query) return { context: '' };
 
   for (let i = 0; i < TAVILY_KEYS.length; i++) {
     const key = TAVILY_KEYS[i];
@@ -456,6 +452,18 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
       keepAliveSrc = setInterval(() => {
         try { if (!signal.aborted) writeThinkContent(''); } catch (e) {}
       }, 4000);
+
+      const bodyPayload = isResearch ? {
+        query: query,
+        search_depth: toolData.search_depth || 'advanced',
+        include_sources: true,
+        stream: true
+      } : {
+        query: query,
+        search_depth: toolData.search_depth || 'basic',
+        include_answer: true,
+        include_images: false
+      };
 
       const res = await fetch(`https://api.tavily.com/${endpoint}`, {
         method: 'POST',
@@ -467,46 +475,76 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
       if (keepAliveSrc) clearInterval(keepAliveSrc);
 
       if (!res.ok) {
+        // En cas d'erreur API (429, 432, 401, 500...), on continue silencieusement vers la clé suivante
         continue;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
       let fullContext = '';
 
-      while (!signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          const cleanLine = line.trim();
-          if (cleanLine.startsWith('data:') && cleanLine !== 'data: [DONE]') {
-            try {
-              const data = JSON.parse(cleanLine.substring(5).trim());
-              let chunk = '';
-              if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
-                chunk = data.choices[0].delta.content;
-              } else if (data.content) {
-                chunk = data.content;
-              }
-              if (chunk) {
-                fullContext += chunk;
-                writeThinkContent(chunk);
-              }
-            } catch (e) {}
+      if (!isResearch) {
+        // Mode SEARCH classique : pas de streaming pour le POST /search
+        const data = await res.json();
+        
+        if (data.answer) {
+            fullContext += `Résumé direct : ${data.answer}\n\n`;
+            writeThinkContent(`Résumé direct : ${data.answer}\n\n`);
+        }
+        
+        if (data.results && data.results.length > 0) {
+            data.results.forEach((r, idx) => {
+                const snippet = `Source ${idx + 1}: ${r.title}\nLien: ${r.url}\nContenu: ${r.content}\n\n`;
+                fullContext += snippet;
+                writeThinkContent(snippet);
+            });
+        }
+        return { context: fullContext };
+
+      } else {
+        // Mode RESEARCH : streaming (SSE) attendu
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (!signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            const cleanLine = line.trim();
+            if (cleanLine.startsWith('data:') && cleanLine !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(cleanLine.substring(5).trim());
+                let chunk = '';
+                
+                // Vérification stricte du format streaming research de Tavily
+                if (data.choices && data.choices[0] && data.choices[0].delta) {
+                    const delta = data.choices[0].delta;
+                    if (delta.content) {
+                        chunk = delta.content;
+                    }
+                } else if (data.content) {
+                    chunk = data.content;
+                }
+                
+                if (chunk) {
+                  fullContext += chunk;
+                  writeThinkContent(chunk);
+                }
+              } catch (e) {}
+            }
           }
         }
+        return { context: fullContext };
       }
-      return { context: fullContext };
 
     } catch (err) {
       if (keepAliveSrc) clearInterval(keepAliveSrc);
       if (err.name === 'AbortError') return { context: '' };
     }
   }
+  // Si TOUTES les clés ont échoué
   return { context: '' };
 }
 
@@ -681,24 +719,20 @@ app.post('/ai', requireAuth, async (req, res) => {
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
-    const systemPrompt = `You are Asistan, a professional AI.
-Respond directly in the user's exact language. Never disclose your tools or internal workings.
+    const systemPrompt = `You are Asistan, a concise, helpful, and highly direct AI.
+Answer strictly in the user's exact language.
 
-TOOL USAGE:
-To use a tool, output exactly this JSON format and nothing else on that line:
-[TOOL: {"name": "tool_name", "params": {"key": "value"}}]
+TOOLS AVAILABLE:
+If the user asks for facts, news, information you don't know, or an image, you MUST use one of these tools by outputting EXACTLY this JSON and nothing else:
+[TOOL: {"name": "search", "params": {"query": "exact search term"}}]
+[TOOL: {"name": "research", "params": {"query": "deep research topic"}}]
+[TOOL: {"name": "image", "params": {"prompt": "detailed description of the image"}}]
 
-AVAILABLE TOOLS:
-1. "search" (Quick facts)
-   Params: "input" (query), "search_depth" ("basic")
-2. "research" (Detailed AI answer)
-   Params: "input" (query), "search_depth" ("advanced"), "output_length" ("short"|"medium"|"long")
-3. "image" (Generate an image)
-   Params: "prompt" (Detailed description)
-
-Rules for tools:
-- Use tools only when necessary.
-- For current events or unknown facts, use "search" or "research".`;
+CRITICAL RULES:
+1. NEVER explain your internal logic.
+2. NEVER mention that you have tools, search engines, or the ability to generate images. Just do it directly.
+3. If you decide to use a tool, DO NOT write any other text or greetings. The JSON tag must be the ONLY thing you say.
+4. DO NOT wrap the JSON block in markdown formatting (like \`\`\`).`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -745,7 +779,7 @@ Rules for tools:
       const params = toolData.params || toolData;
 
       if (action === 'image') {
-        const prompt = params.prompt || params.input;
+        const prompt = params.prompt || params.input || params.query;
         if (!prompt) return;
         const keepAliveImg = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 4000);
         const imgUrl = await processAndUploadImage(prompt);
@@ -765,7 +799,13 @@ Rules for tools:
         
         let searchResultsText = searchRes.context;
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = `You are Asistan. Answer directly based on the search results below. Reply in the exact same language as the user. Do not mention you performed a search. Do not use tools again.\n\nSearch Results:\n${searchResultsText}`;
+        let finalSystemPrompt = `You are Asistan. `;
+        
+        if (!searchResultsText) {
+             finalSystemPrompt += `Your attempt to search the web failed or returned no results. Please inform the user naturally in their language without mentioning internal search errors or tools. Provide any general knowledge you might have.`;
+        } else {
+             finalSystemPrompt += `Answer directly and concisely based strictly on these search results. Reply in the exact same language as the user. NEVER mention you performed a search. NEVER use tools again.\n\nSearch Results:\n${searchResultsText}`;
+        }
         
         if (preContent) {
           finalSystemPrompt += `\n\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said.`;
