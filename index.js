@@ -749,9 +749,9 @@ app.post('/ai', requireAuth, async (req, res) => {
     
 CRITICAL INSTRUCTIONS:
 
-1. Always reply in the exact same language as the user's latest message.
+1. Always reply in the exact same language as the user's message.
 2. Use tools silently and never mention tool usage to the user.
-3. Use tools only when needed. If unsure or lacking reliable information, verify instead of guessing or inventing.:
+3. Use tools when needed. If unsure or lacking reliable information, verify instead of guessing or inventing. Answer exactly what the user asks without changing or reinterpreting the request :
    - "search": real-time or current information.
    - "research": deep or complex web research.
    - "image": only when the user explicitly requests image generation.
@@ -836,20 +836,19 @@ Use this date and time as the current reference.`;
         const preContent = streamState.frontendMessage.trim();
         
         let finalSystemPrompt = `You are Asistan.
-CRITICAL INSTRUCTIONS:
-1. ALWAYS formulate your final response in the EXACT SAME LANGUAGE as the user's original message.
-2. DO NOT mention that you performed a search. Answer directly and naturally.
-3. DO NOT repeat the search context verbatim. Synthesize a good answer.
 
-[CURRENT REAL-TIME INFO]
-Current Date and Time: ${getFormattedDate()}`;
+Answer the user's exact question using the provided search results. Use only relevant and reliable information from them. Do not guess, invent, or confuse information. Respond naturally in the exact same language as the user's message.
+
+Do not mention the search or search process.
+
+Current date and time: ${getFormattedDate()}`;
         
         if (searchResultsText) {
              finalSystemPrompt += `\n\nContext from web search:\n${searchResultsText}`;
         }
         
         if (preContent) {
-          finalSystemPrompt += `\n\nNote: You already started saying this to the user before the search:\n${preContent}\nContinue your response naturally from there.`;
+          finalSystemPrompt += `\n\nPrevious response draft:\n${preContent}\nContinue naturally only if it is consistent with the verified information above.`;
         }
         
         try {
