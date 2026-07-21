@@ -663,8 +663,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     abortController: new AbortController(), 
     frontendMessage: '', 
     dbMessage: '',
-    thinkOpen: false,
-    thinkClosed: false
+    thinkOpen: false
   };
   activeStreams.set(sess, streamState);
   const signal = streamState.abortController.signal;
@@ -714,16 +713,20 @@ app.post('/ai', requireAuth, async (req, res) => {
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
-    const systemPrompt = `You are Asistan. Match the user's language natively. Your primary focus is the user's latest message.
+    const systemPrompt = `You are Asistan, an intelligent and helpful AI.
+You must read and understand the entire conversation history to provide accurate and context-aware responses.
+Pay special attention to the user's latest message, but always consider previous messages to maintain continuity.
 
-Respond naturally to casual greetings and conversations.
+CRITICAL REQUIREMENT:
+You MUST reply natively in the EXACT SAME LANGUAGE as the user's latest message. If the user speaks French, your final answer MUST be in French. Do not let your English reasoning affect your final output language.
 
-Use tools autonomously for factual questions, deep topics, or image requests. Output exactly one JSON tool tag to trigger a tool.
-
-Tools:
-[TOOL: {"name": "search", "params": {"query": "Query", "search_depth": "basic"}}]
-[TOOL: {"name": "research", "params": {"query": "Query", "search_depth": "advanced"}}]
-[TOOL: {"name": "image", "params": {"prompt": "Image description"}}]`;
+TOOL USAGE (OPTIONAL):
+You have access to tools, but ONLY use them if the user explicitly asks for an image, or if you need to search the internet for facts, recent news, or deep information that you don't know.
+If you can answer a greeting or a general question directly, DO NOT use any tools. Act naturally as a conversational assistant.
+To use a tool, output exactly ONE of these JSON formats and nothing else:
+[TOOL: {"name": "search", "params": {"query": "Search query", "search_depth": "basic"}}]
+[TOOL: {"name": "research", "params": {"query": "Deep research topic", "search_depth": "advanced"}}]
+[TOOL: {"name": "image", "params": {"prompt": "Detailed image description"}}]`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -740,9 +743,9 @@ Tools:
     }
 
     function closeThink() {
-      if (streamState.thinkOpen && !streamState.thinkClosed) {
+      if (streamState.thinkOpen) {
         streamState.dbMessage += '\n</think>\n';
-        streamState.thinkClosed = true;
+        streamState.thinkOpen = false;
       }
     }
 
@@ -791,14 +794,20 @@ Tools:
         let searchResultsText = searchRes.context;
         const preContent = streamState.frontendMessage.trim();
         
-        let finalSystemPrompt = `You are Asistan. Reply natively in the user's language. Use the provided context to answer the user's latest message.`;
+        let finalSystemPrompt = `You are Asistan.
+CRITICAL: You MUST formulate your final response in the EXACT SAME LANGUAGE as the user's last message.
+
+You just performed a web search. Read the following context from the search carefully.
+Answer the user's request using the information from the context.
+DO NOT repeat the context verbatim. Synthesize and explain it naturally in the user's language.
+If the user's previous messages modify the context of their request, take them into account.`;
         
         if (searchResultsText) {
-             finalSystemPrompt += `\n\nContext:\n${searchResultsText}`;
+             finalSystemPrompt += `\n\nContext from web search:\n${searchResultsText}`;
         }
         
         if (preContent) {
-          finalSystemPrompt += `\n\nYou previously started with:\n${preContent}\nContinue seamlessly from there.`;
+          finalSystemPrompt += `\n\nNote: You already started saying this to the user before the search:\n${preContent}\nContinue your response naturally from there.`;
         }
         
         try {
