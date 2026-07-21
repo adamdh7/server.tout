@@ -470,6 +470,8 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
     }
   };
 
+  await streamText(`\n\n${query}\n\n`);
+
   for (let i = 0; i < TAVILY_KEYS.length; i++) {
     const key = TAVILY_KEYS[i];
     let keepAliveSrc = null;
@@ -509,14 +511,16 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
         const data = await res.json();
         
         if (data.answer) {
-            const formattedAnswer = `Repons: ${data.answer}\n\n`;
+            const formattedAnswer = `${data.answer}\n\n`;
             fullContext += formattedAnswer;
             await streamText(formattedAnswer);
         }
         
         if (data.results && data.results.length > 0) {
             for (const r of data.results) {
-                const snippet = `### ${r.title} ###\nUrl: ${r.url}\n${r.content}\n\n`;
+                let safeContent = r.content || '';
+                safeContent = safeContent.replace(/(#{1,6}\s)/g, '\n\n$1');
+                const snippet = `\n\n${r.title}\n${r.url}\n\n${safeContent}\n\n`;
                 fullContext += snippet;
                 await streamText(snippet);
             }
@@ -551,8 +555,9 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
                 }
                 
                 if (chunk) {
-                  fullContext += chunk;
-                  writeThinkContent(chunk);
+                  let safeChunk = chunk.replace(/(#{1,6}\s)/g, '\n\n$1');
+                  fullContext += safeChunk;
+                  writeThinkContent(safeChunk);
                 }
               } catch (e) {}
             }
@@ -1041,8 +1046,12 @@ Current Date and Time: ${getFormattedDate()}`;
     try {
       if (streamState.dbMessage.trim() !== '') {
         const asstMsgId = Date.now().toString() + Math.random().toString();
+        
+        let finalDbMessage = streamState.dbMessage;
+        finalDbMessage = finalDbMessage.replace(/<\/think>\s*<think>/gi, '\n\n');
+
         await messagesCollection.insertOne({
-          id: asstMsgId, role: 'assistant', content: streamState.dbMessage, session_id: sess, timestamp: new Date().toISOString()
+          id: asstMsgId, role: 'assistant', content: finalDbMessage, session_id: sess, timestamp: new Date().toISOString()
         });
 
         if (attachmentsToSave.length > 0) {
