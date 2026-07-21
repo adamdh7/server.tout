@@ -20,11 +20,6 @@ const CLOUDCONVERT_KEYS = Object.keys(process.env)
   .map(key => process.env[key])
   .filter(k => typeof k === 'string' && k.trim().length > 0);
 
-const TAVILY_KEYS = Object.keys(process.env)
-  .filter(key => key.startsWith('TAVILY_KEY'))
-  .map(key => process.env[key])
-  .filter(k => typeof k === 'string' && k.trim().length > 0);
-
 const CF_AI_CREDENTIALS = [];
 if (process.env.CF_ACCOUNT_ID && process.env.CF_AI_TOKEN) {
   CF_AI_CREDENTIALS.push({ account: process.env.CF_ACCOUNT_ID, token: process.env.CF_AI_TOKEN });
@@ -35,6 +30,12 @@ for (let i = 1; i <= 20; i++) {
   if (acc && tok) {
     CF_AI_CREDENTIALS.push({ account: acc, token: tok });
   }
+}
+
+const TAVILY_KEYS = [];
+if (process.env.TAVILY_KEY) TAVILY_KEYS.push(process.env.TAVILY_KEY);
+for (let i = 1; i <= 20; i++) {
+  if (process.env[`TAVILY_KEY_${i}`]) TAVILY_KEYS.push(process.env[`TAVILY_KEY_${i}`]);
 }
 
 const TRUSTED_BROWSER_HOSTS = new Set(['tout.adamdh7.org', 'localhost:']);
@@ -61,8 +62,7 @@ async function getDb() {
     }
     await db.command({ ping: 1 }, { maxTimeMS: 2000 });
   } catch (e) {
-    console.error(e.message);
-    try { await mongoClient.close(); } catch (err) { console.error(err.message); }
+    try { await mongoClient.close(); } catch (err) {}
     await mongoClient.connect();
     db = mongoClient.db('chatdb');
   }
@@ -74,7 +74,6 @@ const FFMPEG_AVAILABLE = (() => {
     const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
     return !result.error && result.status === 0;
   } catch (e) {
-    console.error(e.message);
     return false;
   }
 })();
@@ -109,7 +108,6 @@ async function uploadToBref(buffer, filename) {
     const data = await res.json();
     return data.url;
   } catch (e) {
-    console.error(e.message);
     throw e;
   }
 }
@@ -330,7 +328,6 @@ async function serveS3RawFile(req, res, key, filename) {
     if (!s3Response.Body) return res.end();
     s3Response.Body.pipe(res);
   } catch (e) {
-    console.error(e.message);
     sendUnknown(req, res);
   }
 }
@@ -338,8 +335,8 @@ async function serveS3RawFile(req, res, key, filename) {
 function reqLikeCleanup(inputStream, ffmpeg, res, abort) {
   const stop = () => {
     abort();
-    try { if (inputStream.destroy) inputStream.destroy(); } catch (e) { console.error(e.message); }
-    try { if (ffmpeg.stdin) ffmpeg.stdin.destroy(); } catch (e) { console.error(e.message); }
+    try { if (inputStream.destroy) inputStream.destroy(); } catch (e) {}
+    try { if (ffmpeg.stdin) ffmpeg.stdin.destroy(); } catch (e) {}
   };
   res.on('close', stop);
   res.on('finish', stop);
@@ -355,7 +352,7 @@ function transcodeVideoStreamToMp4(inputStream, res) {
   res.setHeader('Content-Type', 'video/mp4');
   res.setHeader('Accept-Ranges', 'none');
   const ffmpeg = spawn('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
-  const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) { console.error(e.message); } };
+  const abort = () => { try { ffmpeg.kill('SIGKILL'); } catch (e) {} };
   reqLikeCleanup(inputStream, ffmpeg, res, abort);
   inputStream.pipe(ffmpeg.stdin);
   ffmpeg.stdout.pipe(res);
@@ -381,7 +378,6 @@ async function serveS3VideoTranscode(req, res, key) {
     if (!s3Response.Body) return sendUnknown(req, res);
     transcodeVideoStreamToMp4(s3Response.Body, res);
   } catch (e) {
-    console.error(e.message);
     sendUnknown(req, res);
   }
 }
@@ -421,9 +417,7 @@ async function fetchAIFallback(model, bodyPayload, signal) {
       
       const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cred.account}/ai/run/${model}`, fetchOptions);
       if (res.ok) return res;
-    } catch (e) {
-      console.error(e.message);
-    }
+    } catch (e) {}
   }
   return null;
 }
@@ -440,15 +434,86 @@ async function processAndUploadImage(prompt) {
     const filename = `TF-${randomNum}.png`;
     return await uploadToBref(Buffer.from(bytes), filename);
   } catch (e) {
-    console.error(e.message);
     return '';
   }
+}
+
+async function performToolSearch(toolData, signal, writeThinkContent) {
+  const endpoint = (toolData.name === 'research' || toolData.action === 'research') ? 'research' : 'search';
+  const bodyPayload = {
+    model: 'auto',
+    stream: true,
+    include_sources: true,
+    input: toolData.input || toolData.query,
+    search_depth: toolData.search_depth || 'basic',
+    output_length: toolData.output_length || 'medium'
+  };
+
+  for (let i = 0; i < TAVILY_KEYS.length; i++) {
+    const key = TAVILY_KEYS[i];
+    let keepAliveSrc = null;
+    try {
+      keepAliveSrc = setInterval(() => {
+        try { if (!signal.aborted) writeThinkContent(''); } catch (e) {}
+      }, 4000);
+
+      const res = await fetch(`https://api.tavily.com/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload),
+        signal
+      });
+
+      if (keepAliveSrc) clearInterval(keepAliveSrc);
+
+      if (!res.ok) {
+        continue;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullContext = '';
+
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const cleanLine = line.trim();
+          if (cleanLine.startsWith('data:') && cleanLine !== 'data: [DONE]') {
+            try {
+              const data = JSON.parse(cleanLine.substring(5).trim());
+              let chunk = '';
+              if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
+                chunk = data.choices[0].delta.content;
+              } else if (data.content) {
+                chunk = data.content;
+              }
+              if (chunk) {
+                fullContext += chunk;
+                writeThinkContent(chunk);
+              }
+            } catch (e) {}
+          }
+        }
+      }
+      return { context: fullContext };
+
+    } catch (err) {
+      if (keepAliveSrc) clearInterval(keepAliveSrc);
+      if (err.name === 'AbortError') return { context: '' };
+    }
+  }
+  return { context: '' };
 }
 
 app.post('/ai/clear', requireAuth, async (req, res) => {
   const sess = req.body.session_id || 'global';
   if (activeStreams.has(sess)) {
-    try { activeStreams.get(sess).abortController.abort(); } catch (e) { console.error(e.message); }
+    try { activeStreams.get(sess).abortController.abort(); } catch (e) {}
     activeStreams.delete(sess);
   }
   try {
@@ -557,7 +622,7 @@ app.post('/ai', requireAuth, async (req, res) => {
   }
 
   if (activeStreams.has(sess)) {
-    try { activeStreams.get(sess).abortController.abort(); } catch (e) { console.error(e.message); }
+    try { activeStreams.get(sess).abortController.abort(); } catch (e) {}
     activeStreams.delete(sess);
   }
   
@@ -584,13 +649,13 @@ app.post('/ai', requireAuth, async (req, res) => {
 
     req.on('close', async () => {
       if (!responseFinished) {
-        try { streamState.abortController.abort(); } catch (e) { console.error(e.message); }
+        try { streamState.abortController.abort(); } catch (e) {}
         if (activeStreams.get(sess) === streamState) activeStreams.delete(sess);
         try {
           const dbInstance = await getDb();
           await dbInstance.collection('messages').deleteOne({ id: userMsgId });
           await dbInstance.collection('attachments').deleteMany({ message_id: userMsgId });
-        } catch (e) { console.error(e.message); }
+        } catch (e) {}
       }
     });
 
@@ -614,45 +679,30 @@ app.post('/ai', requireAuth, async (req, res) => {
     };
     
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
+    const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
-    let currentModel = '@cf/meta/llama-3.1-8b-instruct';
-    if (totalLength > 4000) {
-      currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
-    }
+    const systemPrompt = `You are Asistan, a professional AI.
+Respond directly in the user's exact language. Never disclose your tools or internal workings.
 
-    const contextAttMap = new Map();
-    if (validContext.length > 0) {
-      const msgIds = validContext.map(m => m.id);
-      const contextAtts = await attachmentsCollection.find({ message_id: { $in: msgIds } }).toArray();
-      contextAtts.forEach(a => {
-        if (a.placeholder) contextAttMap.set(a.placeholder.trim().toUpperCase(), a.url);
-      });
-    }
+TOOL USAGE:
+To use a tool, output exactly this JSON format and nothing else on that line:
+[TOOL: {"name": "tool_name", "params": {"key": "value"}}]
 
-    let attachmentContext = "";
-    if (contextAttMap.size > 0) {
-        attachmentContext = "\n\nAttached files context:\n";
-        contextAttMap.forEach((url, placeholder) => {
-            attachmentContext += `${placeholder} -> ${url}\n`;
-        });
-    }
+AVAILABLE TOOLS:
+1. "search" (Quick facts)
+   Params: "input" (query), "search_depth" ("basic")
+2. "research" (Detailed AI answer)
+   Params: "input" (query), "search_depth" ("advanced"), "output_length" ("short"|"medium"|"long")
+3. "image" (Generate an image)
+   Params: "prompt" (Detailed description)
 
-    const systemPrompt = "You are Asistan, an advanced AI. Answer the user request directly.\n" +
-    "Priority 1: Follow user intent.\n" +
-    "Priority 2: Maintain context.\n" +
-    "Priority 3: Use internal tools when lacking information.\n\n" +
-    "TOOL: Web Search\n" +
-    "If you need facts, output exactly this JSON format:\n" +
-    "[SEARCH: {\"endpoint\": \"/search\" or \"/research\", \"input\": \"your specific question\", \"model\": \"pro\", \"search_depth\": \"advanced\", \"output_length\": \"long\"}]\n" +
-    "Use /search for quick facts, /research for deep topics. Use 'pro' model.\n\n" +
-    "TOOL: Image\n" +
-    "Output: [IMAGE: description]\n\n" +
-    "Rules: Do not mention tools to the user." + attachmentContext;
+Rules for tools:
+- Use tools only when necessary.
+- For current events or unknown facts, use "search" or "research".`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
     let attachmentsToSave = [];
-    let imageIndex = 0;
 
     function writeThinkContent(str) {
       if (!str || signal.aborted) return;
@@ -679,132 +729,50 @@ app.post('/ai', requireAuth, async (req, res) => {
       res.write(JSON.stringify({ type: 'final', content: str }) + '\n');
     }
 
-    async function handleTag(tag, allowSearch, isThinking) {
+    async function handleTag(tagContent, allowTools, isThinking) {
       if (signal.aborted) return;
-      const tImgMatch = tag.match(/^\[\s*IMAGE\s*:\s*([\s\S]*?)\]$/i);
-      const tSrcMatch = tag.match(/^\[\s*SEARCH\s*:\s*([\s\S]*?)\]$/i);
+      const match = tagContent.match(/^\[\s*TOOL\s*:\s*(\{[\s\S]*?\})\s*\]$/i);
+      if (!match) return;
 
-      if (tImgMatch) {
-        const prompt = tImgMatch[1].trim();
-        imageIndex++;
-        const keepAliveImg = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '••••' }) + '\n'); } catch (e) { console.error(e.message); } }, 1000);
+      let toolData;
+      try {
+        toolData = JSON.parse(match[1]);
+      } catch (e) {
+        return;
+      }
+
+      const action = (toolData.action || toolData.name || '').toLowerCase();
+      const params = toolData.params || toolData;
+
+      if (action === 'image') {
+        const prompt = params.prompt || params.input;
+        if (!prompt) return;
+        const keepAliveImg = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '• ' }) + '\n'); } catch (e) {} }, 4000);
         const imgUrl = await processAndUploadImage(prompt);
         clearInterval(keepAliveImg);
         if (signal.aborted) return;
-        const dbTag = `[IMAGES: ${imageIndex}]`;
-        if (imgUrl) attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
-        writeFinalContent(imgUrl ? `\n\n${imgUrl}\n\n` : '');
-      } else if (tSrcMatch) {
-        if (!allowSearch) return;
-        let queryData = tSrcMatch[1].trim();
-        let searchPayload = {};
-        
-        try {
-          searchPayload = JSON.parse(queryData);
-          if (!searchPayload.input) searchPayload.input = queryData;
-        } catch (e) {
-          searchPayload = { endpoint: '/research', input: queryData, model: 'pro', search_depth: 'advanced', output_length: 'long' };
-        }
-        
-        writeThinkContent(`\nRecherche en cours: ${searchPayload.input}\n\n`);
-        
-        const keepAliveSrc = setInterval(() => { try { if(!signal.aborted) res.write(JSON.stringify({ type: 'final', content: '••••' }) + '\n'); } catch (e) { console.error(e.message); } }, 1000);
-        
-        let fullSearchContext = '';
-        let searchSuccess = false;
 
-        for (const tKey of TAVILY_KEYS) {
-            try {
-                const ep = searchPayload.endpoint === '/search' ? '/search' : '/research';
-                const sRes = await fetch(`https://api.tavily.com${ep}`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${tKey}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query: searchPayload.input,
-                        model: searchPayload.model || 'pro',
-                        search_depth: searchPayload.search_depth || 'advanced',
-                        stream: true,
-                        include_sources: false,
-                        output_length: searchPayload.output_length || 'long'
-                    })
-                });
-                
-                if (!sRes.ok) continue;
-                
-                const sReader = sRes.body.getReader();
-                const sDecoder = new TextDecoder();
-                let sBuffer = '';
-                let receivedAny = false;
-                
-                while (!signal.aborted) {
-                    const { done, value } = await sReader.read();
-                    if (done) break;
-                    sBuffer += sDecoder.decode(value, { stream: true });
-                    const sLines = sBuffer.split('\n');
-                    sBuffer = sLines.pop() || '';
-                    
-                    for (const sLine of sLines) {
-                        const cLine = sLine.trim();
-                        if (cLine.startsWith('data:') && cLine !== 'data: [DONE]') {
-                            try {
-                                const dStr = cLine.substring(5).trim();
-                                const dObj = JSON.parse(dStr);
-                                let chunkContent = '';
-                                if (dObj.choices && dObj.choices[0] && dObj.choices[0].delta && dObj.choices[0].delta.content) {
-                                    chunkContent = dObj.choices[0].delta.content;
-                                } else if (dObj.content) {
-                                     chunkContent = dObj.content;
-                                }
-                                
-                                if (chunkContent) {
-                                    fullSearchContext += chunkContent;
-                                    writeThinkContent(chunkContent);
-                                    receivedAny = true;
-                                }
-                            } catch (errParse) {
-                                console.error(errParse.message);
-                            }
-                        }
-                    }
-                }
-                
-                if (receivedAny) {
-                    searchSuccess = true;
-                    break;
-                }
-            } catch (e) {
-                console.error(e.message);
-            }
+        if (imgUrl) {
+          const dbTag = `[IMAGE GENERATED: "${prompt}"]`;
+          attachmentsToSave.push({ placeholder: dbTag, url: `\n\n${imgUrl}\n\n` });
+          writeFinalContent(`\n\n${imgUrl}\n\n`);
         }
+      } else if ((action === 'search' || action === 'research') && allowTools) {
+        writeThinkContent('\n\n');
         
-        clearInterval(keepAliveSrc);
+        const searchRes = await performToolSearch(params, signal, writeThinkContent);
         if (signal.aborted) return;
         
-        if (!searchSuccess) {
-            writeThinkContent('\n\nRecherche échouée ou aucun résultat utile.\n');
-        } else {
-            writeThinkContent('\n\nRecherche terminée.\n');
-        }
-        
-        let searchResultsText = fullSearchContext.trim();
-        if (searchResultsText.length > 8000) searchResultsText = searchResultsText.substring(0, 8000);
-        
+        let searchResultsText = searchRes.context;
         const preContent = streamState.frontendMessage.trim();
-        let finalSystemPrompt = "You are Asistan. You performed a web search. Here are the facts found:\n" +
-        "--- START SEARCH RESULTS ---\n" + searchResultsText + "\n--- END SEARCH RESULTS ---\n\n" +
-        "INSTRUCTIONS:\n" +
-        "1. Answer directly based on the search results.\n" +
-        "2. Reply in the EXACT same language as the user.\n" +
-        "3. DO NOT mention that you performed a search or used a tool.\n" +
-        "4. Resolve any contradictions logically.\n" +
-        "5. Do NOT output [SEARCH: ...] tags again.";
+        let finalSystemPrompt = `You are Asistan. Answer directly based on the search results below. Reply in the exact same language as the user. Do not mention you performed a search. Do not use tools again.\n\nSearch Results:\n${searchResultsText}`;
         
         if (preContent) {
-          finalSystemPrompt += `\n\nImportant: You had already started responding to the user with the following text:\n"""\n${preContent}\n"""\nContinue your response DIRECTLY from where you left off. Do not repeat what you already said.`;
+          finalSystemPrompt += `\n\nImportant: You already started answering with:\n"""\n${preContent}\n"""\nContinue directly from there without repeating what you already said.`;
         }
-
+        
         try {
-          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
+          const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
           if (!aiFinalRaw) {
             if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
@@ -815,7 +783,7 @@ app.post('/ai', requireAuth, async (req, res) => {
             const decoderFinal = new TextDecoder();
             let bufferFinal = '';
             
-            const innerProcessor = createProcessor(false, false);
+            const innerProcessor = createProcessor(false);
 
             while (!signal.aborted) {
               const { done, value } = await readerFinal.read();
@@ -832,17 +800,17 @@ app.post('/ai', requireAuth, async (req, res) => {
                     if (dataFinal.response !== undefined && dataFinal.response !== null) {
                       await innerProcessor.processStr(String(dataFinal.response));
                     }
-                  } catch (e) { console.error(e.message); }
+                  } catch (e) {}
                 }
               }
             }
             innerProcessor.flush();
           }
-        } catch (e) { console.error(e.message); }
+        } catch (e) {}
       }
     }
 
-    function createProcessor(allowSearchFlag, isDeepSeek) {
+    function createProcessor(allowTools) {
       return {
         streamBuffer: '',
         isThinking: false,
@@ -874,64 +842,63 @@ app.post('/ai', requireAuth, async (req, res) => {
 
             const tagStart = this.streamBuffer.indexOf('[');
             if (tagStart !== -1) {
-              const tagEnd = this.streamBuffer.indexOf(']', tagStart);
-              if (tagEnd !== -1) {
-                const tagContent = this.streamBuffer.substring(tagStart, tagEnd + 1);
-                if (/^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
-                  const beforeTag = this.streamBuffer.substring(0, tagStart);
-                  if (this.isThinking) {
-                    writeThinkContent(beforeTag);
-                  } else {
-                    writeFinalContent(beforeTag);
-                  }
-
-                  await handleTag(tagContent, allowSearchFlag, this.isThinking);
-
-                  this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
-                  if (allowSearchFlag && isDeepSeek && /^\[\s*(IMAGE|SEARCH)\s*:/i.test(tagContent)) {
-                    abortOuter = true;
-                  }
-                  continue;
-                } else {
-                  const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
-                  if (this.isThinking) {
-                    writeThinkContent(beforeBracket);
-                  } else {
-                    writeFinalContent(beforeBracket);
-                  }
-                  this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
-                  continue;
+                if (tagStart > 0) {
+                    const chunk = this.streamBuffer.substring(0, tagStart);
+                    if (this.isThinking) writeThinkContent(chunk);
+                    else writeFinalContent(chunk);
+                    this.streamBuffer = this.streamBuffer.substring(tagStart);
+                    continue;
                 }
-              } else {
-                 if (this.streamBuffer.length - tagStart > 2500) {
-                     const beforeBracket = this.streamBuffer.substring(0, tagStart + 1);
-                     if (this.isThinking) {
-                       writeThinkContent(beforeBracket);
-                     } else {
-                       writeFinalContent(beforeBracket);
-                     }
-                     this.streamBuffer = this.streamBuffer.substring(tagStart + 1);
-                     continue;
-                 }
-                 break;
-              }
+
+                const target = "[TOOL: ";
+                const checkLen = Math.min(this.streamBuffer.length, target.length);
+                const isMatchSoFar = this.streamBuffer.substring(0, checkLen).toUpperCase() === target.substring(0, checkLen);
+
+                if (!isMatchSoFar) {
+                    if (this.isThinking) writeThinkContent('[');
+                    else writeFinalContent('[');
+                    this.streamBuffer = this.streamBuffer.substring(1);
+                    continue;
+                }
+
+                if (this.streamBuffer.length >= target.length) {
+                    const tagEnd = this.streamBuffer.indexOf(']');
+                    if (tagEnd !== -1) {
+                        const tagContent = this.streamBuffer.substring(0, tagEnd + 1);
+                        this.streamBuffer = this.streamBuffer.substring(tagEnd + 1);
+                        await handleTag(tagContent, allowTools, this.isThinking);
+                        if (allowTools && /^\[\s*TOOL\s*:/i.test(tagContent)) {
+                            abortOuter = true;
+                        }
+                        continue;
+                    } else {
+                        if (this.streamBuffer.length > 3000) {
+                            if (this.isThinking) writeThinkContent(this.streamBuffer.substring(0, 1));
+                            else writeFinalContent(this.streamBuffer.substring(0, 1));
+                            this.streamBuffer = this.streamBuffer.substring(1);
+                            continue;
+                        }
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
 
-            let safeLen = this.streamBuffer.length - 15;
+            let safeLen = this.streamBuffer.length;
+            const lastLt = this.streamBuffer.lastIndexOf('<');
+            const lastSq = this.streamBuffer.lastIndexOf('[');
+
+            if (lastLt !== -1 || lastSq !== -1) {
+                safeLen = Math.max(lastLt !== -1 ? lastLt : 0, lastSq !== -1 ? lastSq : 0);
+            }
+
             if (safeLen > 0) {
-              const lastLt = this.streamBuffer.lastIndexOf('<', safeLen);
-              const lastSq = this.streamBuffer.lastIndexOf('[', safeLen);
-              const maxLast = Math.max(lastLt, lastSq);
-              if (maxLast !== -1) safeLen = maxLast;
-              if (safeLen > 0) {
                 const chunkToFlush = this.streamBuffer.substring(0, safeLen);
-                if (this.isThinking) {
-                  writeThinkContent(chunkToFlush);
-                } else {
-                  writeFinalContent(chunkToFlush);
-                }
+                if (this.isThinking) writeThinkContent(chunkToFlush);
+                else writeFinalContent(chunkToFlush);
                 this.streamBuffer = this.streamBuffer.substring(safeLen);
-              }
+                continue;
             }
             break;
           }
@@ -939,18 +906,15 @@ app.post('/ai', requireAuth, async (req, res) => {
         },
         flush() {
           if (this.streamBuffer.length > 0 && !signal.aborted) {
-            if (this.isThinking) {
-              writeThinkContent(this.streamBuffer);
-            } else {
-              writeFinalContent(this.streamBuffer);
-            }
+            if (this.isThinking) writeThinkContent(this.streamBuffer);
+            else writeFinalContent(this.streamBuffer);
             this.streamBuffer = '';
           }
         }
       };
     }
 
-    const mainProcessor = createProcessor(true, currentModel === '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b');
+    const mainProcessor = createProcessor(true);
 
     if (!aiRaw && !signal.aborted) {
       res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
@@ -978,11 +942,11 @@ app.post('/ai', requireAuth, async (req, res) => {
                     const shouldAbort = await mainProcessor.processStr(String(data.response));
                     if (shouldAbort) {
                       streamAborted = true;
-                      try { await reader.cancel(); } catch (err) { console.error(err.message); }
+                      try { await reader.cancel(); } catch (err) {}
                       break;
                     }
                   }
-                } catch (e) { console.error(e.message); }
+                } catch (e) {}
               }
             }
             if (streamAborted) break;
@@ -1011,14 +975,13 @@ app.post('/ai', requireAuth, async (req, res) => {
         }
       }
       responseFinished = true;
-    } catch (e) { console.error(e.message); }
+    } catch (e) {}
     
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
     res.end();
   } catch (e) {
-    console.error(e.message);
     if (activeStreams.has(sess) && activeStreams.get(sess) === streamState) {
       activeStreams.delete(sess);
     }
@@ -1099,7 +1062,7 @@ app.post('/calcul', requireAuth, async (req, res) => {
               const strChunk = String(data.response);
               if (strChunk) res.write(strChunk);
             }
-          } catch (e) { console.error(e.message); }
+          } catch (e) {}
         }
       }
     }
@@ -1345,15 +1308,15 @@ app.post('/resize', requireAuth, async (req, res) => {
       let responded = false;
       
       const timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch(e) { console.error(e.message); }
+        try { child.kill('SIGKILL'); } catch(e) {}
       }, 60000);
 
       child.on('error', (err) => {
         clearTimeout(timer);
         if (responded) return;
         responded = true;
-        try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
-        try { fs.unlinkSync(outImg); } catch (e) { console.error(e.message); }
+        try { fs.unlinkSync(tmpImg); } catch (e) {}
+        try { fs.unlinkSync(outImg); } catch (e) {}
         res.status(500).json({ error: "Erè redimansyon" });
       });
 
@@ -1371,8 +1334,8 @@ app.post('/resize', requireAuth, async (req, res) => {
         } catch (e) {
           res.status(500).json({ error: "Erè redimansyon" });
         } finally {
-          try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
-          try { fs.unlinkSync(outImg); } catch (e) { console.error(e.message); }
+          try { fs.unlinkSync(tmpImg); } catch (e) {}
+          try { fs.unlinkSync(outImg); } catch (e) {}
         }
       });
       return;
@@ -1386,7 +1349,7 @@ app.post('/resize', requireAuth, async (req, res) => {
       const child = spawn('ffmpeg', ['-nostdin', '-i', tmpImg, '-vf', `scale=${s}:${s}`, '-y', outImg], { stdio: 'ignore' });
       
       const timer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch(e) { console.error(e.message); }
+        try { child.kill('SIGKILL'); } catch(e) {}
       }, 60000);
 
       child.on('error', (err) => {
@@ -1394,7 +1357,7 @@ app.post('/resize', requireAuth, async (req, res) => {
         completed++;
         if (completed === sizes.length && !responded) {
           responded = true;
-          try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
+          try { fs.unlinkSync(tmpImg); } catch (e) {}
           if (taskId) tasks.set(taskId, { step: 'fini', urls });
           res.json({ urls });
         }
@@ -1407,12 +1370,12 @@ app.post('/resize', requireAuth, async (req, res) => {
             const outBuf = fs.readFileSync(outImg);
             urls.push(await uploadToBref(outBuf, `resized-${s}.png`));
           }
-        } catch (e) { console.error(e.message); }
-        try { fs.unlinkSync(outImg); } catch (e) { console.error(e.message); }
+        } catch (e) {}
+        try { fs.unlinkSync(outImg); } catch (e) {}
         completed++;
         if (completed === sizes.length && !responded) {
           responded = true;
-          try { fs.unlinkSync(tmpImg); } catch (e) { console.error(e.message); }
+          try { fs.unlinkSync(tmpImg); } catch (e) {}
           if (taskId) tasks.set(taskId, { step: 'fini', urls });
           res.json({ urls });
         }
