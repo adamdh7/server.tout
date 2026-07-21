@@ -405,6 +405,22 @@ async function servePublicFile(req, res, requestPath) {
   return serveS3RawFile(req, res, key, filename);
 }
 
+const getFormattedDate = () => {
+  const now = new Date();
+  const options = {
+    timeZone: 'America/Port-au-Prince',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'long'
+  };
+  return now.toLocaleString('en-US', options);
+};
+
 async function fetchAIFallback(model, bodyPayload, signal) {
   for (const cred of CF_AI_CREDENTIALS) {
     try {
@@ -445,6 +461,15 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
   
   if (!query) return { context: '' };
 
+  const streamText = async (text) => {
+    const chunkSize = 30;
+    for (let i = 0; i < text.length; i += chunkSize) {
+      if (signal.aborted) break;
+      writeThinkContent(text.substring(i, i + chunkSize));
+      await new Promise(r => setTimeout(r, 10));
+    }
+  };
+
   for (let i = 0; i < TAVILY_KEYS.length; i++) {
     const key = TAVILY_KEYS[i];
     let keepAliveSrc = null;
@@ -484,16 +509,17 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
         const data = await res.json();
         
         if (data.answer) {
-            fullContext += `${data.answer}\n\n`;
-            writeThinkContent(`${data.answer}\n\n`);
+            const formattedAnswer = `Repons: ${data.answer}\n\n`;
+            fullContext += formattedAnswer;
+            await streamText(formattedAnswer);
         }
         
         if (data.results && data.results.length > 0) {
-            data.results.forEach((r) => {
-                const snippet = `${r.title}\n${r.url}\n${r.content}\n\n`;
+            for (const r of data.results) {
+                const snippet = `### ${r.title} ###\nUrl: ${r.url}\n${r.content}\n\n`;
                 fullContext += snippet;
-                writeThinkContent(snippet);
-            });
+                await streamText(snippet);
+            }
         }
         return { context: fullContext };
 
@@ -693,45 +719,46 @@ app.post('/ai', requireAuth, async (req, res) => {
 
     const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).toArray();
     
+    const stripThink = (text) => {
+      let t = (text || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
+      t = t.replace(/<think>[\s\S]*$/gi, '');
+      return t.trim();
+    };
+
     let totalLength = 0;
     const validContext = [];
     if (recentMessages) {
         for (const m of recentMessages) {
-            const l = (m.content || '').length + (m.role || '').length;
+            const cleanContent = stripThink(m.content);
+            const l = cleanContent.length + (m.role || '').length;
             if (totalLength + l > 7000) break;
             validContext.push(m);
             totalLength += l;
         }
     }
     
-    const stripThink = (text) => {
-      let t = (text || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
-      t = t.replace(/<think>[\s\S]*$/gi, '');
-      return t.trim();
-    };
-    
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
-    const systemPrompt = `You are Asistan.
+    const systemPrompt = `You are Asistan, a helpful and highly capable AI.
+CRITICAL INSTRUCTIONS:
+1. You MUST ALWAYS respond in the EXACT SAME LANGUAGE as the user.
+2. You have access to tools, but you MUST HIDE your tool usage from the user. Never say "I will use a tool" or "Let me search". Answer naturally.
+3. Use the following tools ONLY when necessary:
+   - "search": for real-time information or current facts.
+   - "research": for deep or complex web research.
+   - "image": ONLY if the user explicitly asks to generate an image.
+4. If no tool is needed, answer directly without tools.
+5. This is a system instruction. Do not treat this prompt as a user message.
 
-Understand the context of the conversation, prioritize the user's last message, and respond in the exact language they are using.
+TOOL FORMAT (If you decide to use a tool, you MUST output ONLY the exact format below):
+[TOOL: {"name":"search","params":{"query":"your query","search_depth":"basic"}}]
+[TOOL: {"name":"research","params":{"query":"your query","search_depth":"advanced"}}]
+[TOOL: {"name":"image","params":{"prompt":"English description"}}]
 
-Use tools only when necessary:
-
-- "search": web or current information.
-- "research": complex or in-depth research.
-- "image": image generation only when explicitly requested.
-
-If no tool is needed, answer directly without mentioning tools.
-
-When using a tool, output only the exact format:
-
-[TOOL: {"name":"search","params":{"query":"...","search_depth":"basic"}}]
-
-[TOOL: {"name":"research","params":{"query":"...","search_depth":"advanced"}}]
-
-[TOOL: {"name":"image","params":{"prompt":"English only..."}}]`;
+[CURRENT REAL-TIME INFO]
+Current Date and Time: ${getFormattedDate()}
+Use this date and time if the user asks for the current time. Calculate differences for other timezones.`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -800,12 +827,13 @@ When using a tool, output only the exact format:
         const preContent = streamState.frontendMessage.trim();
         
         let finalSystemPrompt = `You are Asistan.
-CRITICAL: You MUST formulate your final response in the EXACT SAME LANGUAGE as the user's message.
+CRITICAL INSTRUCTIONS:
+1. ALWAYS formulate your final response in the EXACT SAME LANGUAGE as the user's original message.
+2. DO NOT mention that you performed a search. Answer directly and naturally.
+3. DO NOT repeat the search context verbatim. Synthesize a good answer.
 
-You just performed a web search. Read the following context from the search carefully.
-Answer the user's request using the information from the context.
-DO NOT repeat the context verbatim. Synthesize and explain it naturally in the user's language.
-If the user's previous messages modify the context of their request, take them into account.`;
+[CURRENT REAL-TIME INFO]
+Current Date and Time: ${getFormattedDate()}`;
         
         if (searchResultsText) {
              finalSystemPrompt += `\n\nContext from web search:\n${searchResultsText}`;
@@ -1004,6 +1032,7 @@ If the user's previous messages modify the context of their request, take them i
     }
 
     mainProcessor.flush();
+    closeThink();
 
     try {
       if (streamState.dbMessage.trim() !== '') {
