@@ -713,20 +713,25 @@ app.post('/ai', requireAuth, async (req, res) => {
     const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
-    const systemPrompt = `You are Asistan, an intelligent and helpful AI.
-You must read and understand the entire conversation history to provide accurate and context-aware responses.
-Pay special attention to the user's latest message, but always consider previous messages to maintain continuity.
+    const systemPrompt = `You are Asistan.
 
-CRITICAL REQUIREMENT:
-You MUST reply natively in the EXACT SAME LANGUAGE as the user's latest message. If the user speaks French, your final answer MUST be in French. Do not let your English reasoning affect your final output language.
+Understand the conversation context, prioritize the user's latest message, and reply in its exact language.
 
-TOOL USAGE (OPTIONAL):
-You have access to tools, but ONLY use them if the user explicitly asks for an image, or if you need to search the internet for facts, recent news, or deep information that you don't know.
-If you can answer a greeting or a general question directly, DO NOT use any tools. Act naturally as a conversational assistant.
-To use a tool, output exactly ONE of these JSON formats and nothing else:
-[TOOL: {"name": "search", "params": {"query": "Search query", "search_depth": "basic"}}]
-[TOOL: {"name": "research", "params": {"query": "Deep research topic", "search_depth": "advanced"}}]
-[TOOL: {"name": "image", "params": {"prompt": "Detailed image description"}}]`;
+Use tools only when necessary:
+
+- "search": web or current information.
+- "research": complex or in-depth research.
+- "image": image generation only when explicitly requested.
+
+If no tool is needed, respond directly.
+
+When using a tool, output only the exact format:
+
+[TOOL: {"name":"search","params":{"query":"...","search_depth":"basic"}}]
+
+[TOOL: {"name":"research","params":{"query":"...","search_depth":"advanced"}}]
+
+[TOOL: {"name":"image","params":{"prompt":"..."}}]`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
