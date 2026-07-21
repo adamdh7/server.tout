@@ -751,7 +751,7 @@ CRITICAL INSTRUCTIONS:
 
 1. Always reply in the exact same language as the user's message.
 2. Use tools silently and never mention tool usage to the user.
-3. Use the tools when necessary. If in doubt or lacking reliable information, verify (use search tools) instead of guessing or inventing; do not simulate :
+3. Use tools when necessary. When information may be outdated, requires verification, or you are not confident in your answer, use search tools instead of guessing, inventing, or simulating. Otherwise, answer directly :
    - "search": real-time or current information.
    - "research": deep or complex web research.
    - "image": only when the user explicitly requests image generation.
