@@ -715,7 +715,7 @@ app.post('/ai', requireAuth, async (req, res) => {
 
     const systemPrompt = `You are Asistan.
 
-Understand the conversation context, prioritize the user's latest message, and reply in its exact language.
+Understand the context of the conversation, prioritize the user's last message, and respond in the exact language they are using.
 
 Use tools only when necessary:
 
@@ -723,7 +723,7 @@ Use tools only when necessary:
 - "research": complex or in-depth research.
 - "image": image generation only when explicitly requested.
 
-If no tool is needed, respond directly.
+If no tool is needed, answer directly without mentioning tools.
 
 When using a tool, output only the exact format:
 
@@ -731,7 +731,7 @@ When using a tool, output only the exact format:
 
 [TOOL: {"name":"research","params":{"query":"...","search_depth":"advanced"}}]
 
-[TOOL: {"name":"image","params":{"prompt":"..."}}]`;
+[TOOL: {"name":"image","params":{"prompt":"English only..."}}]`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, stream: true }, signal);
 
@@ -800,7 +800,7 @@ When using a tool, output only the exact format:
         const preContent = streamState.frontendMessage.trim();
         
         let finalSystemPrompt = `You are Asistan.
-CRITICAL: You MUST formulate your final response in the EXACT SAME LANGUAGE as the user's last message.
+CRITICAL: You MUST formulate your final response in the EXACT SAME LANGUAGE as the user's message.
 
 You just performed a web search. Read the following context from the search carefully.
 Answer the user's request using the information from the context.
