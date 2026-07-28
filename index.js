@@ -703,8 +703,11 @@ app.get('/ai', requireAuth, async (req, res) => {
     const messagesMap = new Map();
     if (messages) {
       for (const row of messages) {
-        if (typeof row.content !== 'string' || row.content.trim() === '') continue;
-        if (!messagesMap.has(row.id)) messagesMap.set(row.id, { role: row.role, content: row.content, timestamp: row.timestamp });
+        if (!row || typeof row.role !== 'string' || typeof row.content !== 'string') continue;
+        if (row.role !== 'user' && row.role !== 'assistant') continue;
+        const cleanContent = row.content.trim();
+        if (cleanContent === '') continue;
+        if (!messagesMap.has(row.id)) messagesMap.set(row.id, { role: row.role, content: cleanContent, timestamp: row.timestamp });
       }
       for (const att of attachments) {
         if (messagesMap.has(att.message_id) && att.placeholder && att.url) {
@@ -788,18 +791,28 @@ app.post('/ai', requireAuth, async (req, res) => {
 
     let totalLength = 0;
     const validContext = [];
-    if (recentMessages) {
+    if (recentMessages && Array.isArray(recentMessages)) {
         for (const m of recentMessages) {
-            const cleanContent = stripThink(m.content);
-            if (!cleanContent) continue;
-            const l = cleanContent.length + (m.role || '').length;
+            if (!m || typeof m.role !== 'string' || typeof m.content !== 'string') continue;
+            if (m.role !== 'user' && m.role !== 'assistant') continue;
+            
+            const cleanContent = stripThink(m.content).trim();
+            if (cleanContent === '') continue;
+            
+            const l = cleanContent.length + m.role.length;
             if (totalLength + l > 7000) break;
+            
             validContext.push({ role: m.role, content: cleanContent });
             totalLength += l;
         }
     }
     
     const context = validContext.reverse();
+    
+    if (context.length > 0 && context[context.length - 1].role === 'user') {
+        context[context.length - 1].content += "\n\n[SYSTEM: Respond and <think> strictly in the exact language of the text above. Do not use English or Chinese unless present above.]";
+    }
+
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
     const systemPrompt = `You are Asistan.
@@ -807,24 +820,23 @@ app.post('/ai', requireAuth, async (req, res) => {
 <system_directives>
 ## ROLE & REASONING
 - Identity: Act exclusively as Asistan.
-- Language Constraint (CRITICAL): You MUST think (inside <think>) AND answer in the EXACT SAME LANGUAGE as the user's prompt. Under NO circumstances should you output Chinese unless the user explicitly writes in Chinese.
-- Autonomous Judgment: Evaluate the context of every request. Rely on your internal knowledge for stable facts. Apply deep reasoning exclusively for complex, multi-step logic.
+- Language: Think and respond strictly in the user's exact language. No English or Chinese unless used by the user.
+- Judgment: Evaluate context autonomously. Rely on internal knowledge for facts; use deep reasoning for complex logic.
 
 ## REAL-TIME DATA & TOOL DEPLOYMENT
-You possess active capabilities for live web search, site navigation, deep research, and image generation. Deploy these tools autonomously to guarantee accuracy and data freshness:
-- Web Search & Navigation: Activate "search" (depth: "basic") to read user-provided URLs, verify time-sensitive events, or update your knowledge.
-- Deep Research: Activate "research" (depth: "advanced") to investigate complex queries.
-- Image Generation: Activate "image" upon explicit requests for visual content.
+Deploy tools autonomously for accuracy:
+- Search: Use "search" (depth:"basic") for URLs, events, or updates.
+- Research: Use "research" (depth:"advanced") for complex queries.
+- Image: Use "image" for visual requests.
 
 ## EXECUTION RULES
-Output tool calls immediately and silently without preamble or explanation. 
-Output ONLY the exact syntax below:
+Output tool calls immediately and silently. Exact syntax ONLY:
 [TOOL: {"name":"search","params":{"query":"<query>","search_depth":"basic"}}]
 [TOOL: {"name":"research","params":{"query":"<query>","search_depth":"advanced"}}]
-[TOOL: {"name":"image","params":{"prompt":"<the english description>"}}]
+[TOOL: {"name":"image","params":{"prompt":"<description>"}}]
 
 ## TIME REFERENCE
-Current Date/Time: ${getFormattedDate()}
+Time: ${getFormattedDate()}
 </system_directives>`;
 
     const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, temperature: 0.6, stream: true }, signal);
@@ -897,14 +909,13 @@ Current Date/Time: ${getFormattedDate()}
 
 <system_directives>
 ## ROLE & BEHAVIOR
-- Language Constraint (CRITICAL): You MUST think (inside <think>) AND answer in the EXACT SAME LANGUAGE as the user's prompt. Under NO circumstances should you output Chinese unless the user explicitly writes in Chinese.
 - Identity: Act exclusively as Asistan.
-- Factual grounding: Rely strictly on the facts, dates, and names provided in the search context.
-- Transparency: State clearly if the provided results are insufficient to answer fully.
-- Delivery: Present information fluidly and naturally, without meta-commentary about the search process itself.
+- Language: Think and respond strictly in the user's exact language. No English or Chinese unless used by the user.
+- Factual grounding: Rely strictly on provided search context. State clearly if insufficient.
+- Delivery: Present fluidly. No meta-commentary about the search process.
 
 ## TIME REFERENCE
-Current Date/Time: ${getFormattedDate()}
+Time: ${getFormattedDate()}
 </system_directives>`;
 
         if (searchResultsText) {
