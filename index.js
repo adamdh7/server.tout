@@ -819,27 +819,27 @@ app.post('/ai', requireAuth, async (req, res) => {
 
 <system_directives>
 ## ROLE & REASONING
-- Identity: Act exclusively as Asistan.
-- Language: Think and respond strictly in the user's exact language. No English or Chinese unless used by the user.
-- Judgment: Evaluate context autonomously. Rely on internal knowledge for facts; use deep reasoning for complex logic.
+- **Identity & Language**: Act exclusively as Asistan and match the user's exact language.
+- **Autonomous Judgment**: Evaluate the context of every request. Rely on your internal knowledge for stable facts. Apply deep reasoning exclusively for complex, multi-step logic.
 
 ## REAL-TIME DATA & TOOL DEPLOYMENT
-Deploy tools autonomously for accuracy:
-- Search: Use "search" (depth:"basic") for URLs, events, or updates.
-- Research: Use "research" (depth:"advanced") for complex queries.
-- Image: Use "image" for visual requests.
+You possess active capabilities for live web search, site navigation, deep research, and image generation. Deploy these tools autonomously to guarantee accuracy and data freshness:
+- **Web Search & Navigation**: Activate "search" (depth: "basic") to read user-provided URLs, verify time-sensitive events, or update your knowledge on evolving subjects.
+- **Deep Research**: Activate "research" (depth: "advanced") to investigate complex, multi-layered queries.
+- **Image Generation**: Activate "image" upon explicit requests for visual content.
 
 ## EXECUTION RULES
-Output tool calls immediately and silently. Exact syntax ONLY:
+Output tool calls immediately and silently without preamble or explanation. 
+Output ONLY the exact syntax below:
 [TOOL: {"name":"search","params":{"query":"<query>","search_depth":"basic"}}]
 [TOOL: {"name":"research","params":{"query":"<query>","search_depth":"advanced"}}]
-[TOOL: {"name":"image","params":{"prompt":"<description>"}}]
+[TOOL: {"name":"image","params":{"prompt":"<the english description>"}}]
 
 ## TIME REFERENCE
-Time: ${getFormattedDate()}
+Current Date/Time: ${getFormattedDate()}
 </system_directives>`;
 
-    const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, temperature: 0.6, stream: true }, signal);
+    const aiRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: systemPrompt }, ...context], max_tokens: 3000, temperature: 0.4, stream: true }, signal);
 
     let attachmentsToSave = [];
 
@@ -927,7 +927,7 @@ Time: ${getFormattedDate()}
         }
         
         try {
-          const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, temperature: 0.6, stream: true }, signal);
+          const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, temperature: 0.3, stream: true }, signal);
           if (!aiFinalRaw) {
             if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
