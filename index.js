@@ -808,6 +808,10 @@ app.post('/ai', requireAuth, async (req, res) => {
     }
     
     const context = validContext.reverse();
+    
+    if (context.length > 0 && context[context.length - 1].role === 'user') {
+        context[context.length - 1].content += "\n\n[SYSTEM: Respond and <think> strictly in the exact language of the text above. Do not use English or Chinese unless present above.]";
+    }
 
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
