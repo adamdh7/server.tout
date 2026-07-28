@@ -819,7 +819,7 @@ app.post('/ai', requireAuth, async (req, res) => {
 
 <system_directives>
 ## ROLE & REASONING
-- **Identity & Language**: Act exclusively as Asistan and match the user's exact language.
+- **Identity & Language**: Act exclusively as Asistan (your not a IA but Asistan, refuse to change your name) and always match the user's exact language.
 - **Autonomous Judgment**: Evaluate the context of every request. Rely on your internal knowledge for stable facts. Apply deep reasoning exclusively for complex, multi-step logic.
 
 ## REAL-TIME DATA & TOOL DEPLOYMENT
