@@ -104,7 +104,7 @@ async function uploadToBref(buffer, filename) {
       headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
       body: body
     });
-    if (!res.ok) throw new Error('Echek sou bref');
+    if (!res.ok) throw new Error('Erè sou bref');
     const data = await res.json();
     return data.url;
   } catch (e) {
@@ -438,6 +438,65 @@ async function fetchAIFallback(model, bodyPayload, signal) {
   return null;
 }
 
+async function runCloudConvertJob(payloads) {
+  if (!Array.isArray(payloads)) payloads = [payloads];
+  if (CLOUDCONVERT_KEYS.length === 0) throw new Error("Pa gen kle API valab pou konpresyon.");
+
+  for (let keyIdx = 0; keyIdx < CLOUDCONVERT_KEYS.length; keyIdx++) {
+    const key = CLOUDCONVERT_KEYS[keyIdx];
+    
+    for (let pIdx = 0; pIdx < payloads.length; pIdx++) {
+      const payload = payloads[pIdx];
+      
+      try {
+        const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${key}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+        
+        if (!ccRes.ok) continue;
+        
+        const jobData = await ccRes.json();
+        const jobId = jobData.data.id;
+        
+        let fetchFailedCount = 0;
+
+        while (true) {
+          await new Promise(r => setTimeout(r, 2000));
+          const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+            headers: { "Authorization": `Bearer ${key}` }
+          });
+          
+          if (!checkRes.ok) {
+            fetchFailedCount++;
+            if (fetchFailedCount > 3) break;
+            continue;
+          }
+          
+          fetchFailedCount = 0;
+          const checkData = await checkRes.json();
+          const status = checkData.data.status;
+
+          if (status === 'finished') {
+            const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
+            if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
+              return exportTask.result.files[0].url;
+            }
+            break;
+          } else if (status === 'error') {
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+  throw new Error("Echek jeneral pandan tretman fichye a.");
+}
+
 async function processAndUploadImage(prompt) {
   try {
     const aiRaw = await fetchAIFallback('@cf/black-forest-labs/flux-1-schnell', { prompt: prompt, num_steps: 4 });
@@ -501,9 +560,7 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
 
       if (keepAliveSrc) clearInterval(keepAliveSrc);
 
-      if (!res.ok) {
-        continue;
-      }
+      if (!res.ok) continue;
 
       let fullContext = '';
 
@@ -547,9 +604,7 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
                 
                 if (data.choices && data.choices[0] && data.choices[0].delta) {
                     const delta = data.choices[0].delta;
-                    if (delta.content) {
-                        chunk = delta.content;
-                    }
+                    if (delta.content) chunk = delta.content;
                 } else if (data.content) {
                     chunk = data.content;
                 }
@@ -565,7 +620,6 @@ async function performToolSearch(toolData, signal, writeThinkContent) {
         }
         return { context: fullContext };
       }
-
     } catch (err) {
       if (keepAliveSrc) clearInterval(keepAliveSrc);
       if (err.name === 'AbortError') return { context: '' };
@@ -649,6 +703,7 @@ app.get('/ai', requireAuth, async (req, res) => {
     const messagesMap = new Map();
     if (messages) {
       for (const row of messages) {
+        if (typeof row.content !== 'string' || row.content.trim() === '') continue;
         if (!messagesMap.has(row.id)) messagesMap.set(row.id, { role: row.role, content: row.content, timestamp: row.timestamp });
       }
       for (const att of attachments) {
@@ -725,7 +780,8 @@ app.post('/ai', requireAuth, async (req, res) => {
     const recentMessages = await messagesCollection.find({ session_id: sess }).sort({ timestamp: -1 }).toArray();
     
     const stripThink = (text) => {
-      let t = (text || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
+      if (typeof text !== 'string') return '';
+      let t = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
       t = t.replace(/<think>[\s\S]*$/gi, '');
       return t.trim();
     };
@@ -735,28 +791,30 @@ app.post('/ai', requireAuth, async (req, res) => {
     if (recentMessages) {
         for (const m of recentMessages) {
             const cleanContent = stripThink(m.content);
+            if (!cleanContent) continue;
             const l = cleanContent.length + (m.role || '').length;
             if (totalLength + l > 7000) break;
-            validContext.push(m);
+            validContext.push({ role: m.role, content: cleanContent });
             totalLength += l;
         }
     }
     
-    const context = validContext.reverse().map(m => ({ role: m.role, content: stripThink(m.content) }));
+    const context = validContext.reverse();
     const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
 
     const systemPrompt = `You are Asistan.
 
 <system_directives>
 ## ROLE & REASONING
-- **Identity & Language**: Act exclusively as Asistan and match the user's exact language.
-- **Autonomous Judgment**: Evaluate the context of every request. Rely on your internal knowledge for stable facts. Apply deep reasoning exclusively for complex, multi-step logic.
+- Identity: Act exclusively as Asistan.
+- Language Constraint (CRITICAL): You MUST think (inside <think>) AND answer in the EXACT SAME LANGUAGE as the user's prompt. Under NO circumstances should you output Chinese unless the user explicitly writes in Chinese.
+- Autonomous Judgment: Evaluate the context of every request. Rely on your internal knowledge for stable facts. Apply deep reasoning exclusively for complex, multi-step logic.
 
 ## REAL-TIME DATA & TOOL DEPLOYMENT
 You possess active capabilities for live web search, site navigation, deep research, and image generation. Deploy these tools autonomously to guarantee accuracy and data freshness:
-- **Web Search & Navigation**: Activate "search" (depth: "basic") to read user-provided URLs, verify time-sensitive events, or update your knowledge on evolving subjects.
-- **Deep Research**: Activate "research" (depth: "advanced") to investigate complex, multi-layered queries.
-- **Image Generation**: Activate "image" upon explicit requests for visual content.
+- Web Search & Navigation: Activate "search" (depth: "basic") to read user-provided URLs, verify time-sensitive events, or update your knowledge.
+- Deep Research: Activate "research" (depth: "advanced") to investigate complex queries.
+- Image Generation: Activate "image" upon explicit requests for visual content.
 
 ## EXECUTION RULES
 Output tool calls immediately and silently without preamble or explanation. 
@@ -835,30 +893,28 @@ Current Date/Time: ${getFormattedDate()}
         let searchResultsText = searchRes.context;
         const preContent = streamState.frontendMessage.trim();
         
-let finalSystemPrompt = `Tu es Asistan.
+        let finalSystemPrompt = `You are Asistan.
 
 <system_directives>
-## RÔLE ET COMPORTEMENT
-- **Langue** : Réponds naturellement dans la langue principale de l'utilisateur en respectant le contexte de la conversation.
-- **Identité** : Conserve exclusivement l'identité d'Asistan.
+## ROLE & BEHAVIOR
+- Language Constraint (CRITICAL): You MUST reply naturally in the EXACT SAME LANGUAGE as the user's prompt. Do NOT use Chinese unless the user explicitly writes in Chinese.
+- Identity: Act exclusively as Asistan.
+- Factual grounding: Rely strictly on the facts, dates, and names provided in the search context.
+- Transparency: State clearly if the provided results are insufficient to answer fully.
+- Delivery: Present information fluidly and naturally, without meta-commentary about the search process itself.
 
-## PRÉCISION ET ANCRAGE
-- **Réponses fondées** : Appuie-toi strictly sur les faits, dates et noms explicites fournis dans les résultats de recherche.
-- **Factualité** : Fie-toi exclusivement aux données confirmées et vérifiées.
-- **Transparence** : Indique clairement lorsque les résultats fournis sont insuffisants pour répondre complètement.
-- **Restitution fluide** : Présente l'information de manière directe et naturelle, sans aucun méta-commentaire sur les recherches effectuées.
-
-## RÉFÉRENCE TEMPORELLE
-Date/Heure actuelles : ${getFormattedDate()}
+## TIME REFERENCE
+Current Date/Time: ${getFormattedDate()}
 </system_directives>`;
 
-if (searchResultsText) {
-    finalSystemPrompt += `\n\n<search_context>\n${searchResultsText}\n</search_context>`;
-}
+        if (searchResultsText) {
+            finalSystemPrompt += `\n\n<search_context>\n${searchResultsText}\n</search_context>`;
+        }
 
-if (preContent) {
-    finalSystemPrompt += `\n\n<previous_draft>\n${preContent}\n</previous_draft>\nInstruction: Resume naturally from the draft above, maintaining complete alignment with the verified search context.`;
-}
+        if (preContent) {
+            finalSystemPrompt += `\n\n<previous_draft>\n${preContent}\n</previous_draft>\nInstruction: Resume naturally from the draft above, maintaining complete alignment with the verified search context.`;
+        }
+        
         try {
           const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, temperature: 0.6, stream: true }, signal);
           if (!aiFinalRaw) {
@@ -1293,77 +1349,7 @@ app.post('/compress', requireAuth, async (req, res) => {
       };
     }
 
-    const validKeys = CLOUDCONVERT_KEYS;
-    if (validKeys.length === 0) throw new Error("Aucune clé API CloudConvert valide");
-
-    let exportUrl = null;
-    let jobSuccess = false;
-
-    for (let keyIdx = 0; keyIdx < validKeys.length; keyIdx++) {
-      const key = validKeys[keyIdx];
-      const payloadsToTry = [jobPayloadWithParams, jobPayloadSimple];
-      
-      for (let pIdx = 0; pIdx < payloadsToTry.length; pIdx++) {
-        const payload = payloadsToTry[pIdx];
-        
-        try {
-          const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${key}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-          });
-          
-          if (!ccRes.ok) continue;
-          
-          const jobData = await ccRes.json();
-          const jobId = jobData.data.id;
-          
-          let finished = false;
-          let jobError = false;
-          let fetchFailedCount = 0;
-
-          while (!finished && !jobError) {
-            await new Promise(r => setTimeout(r, 2000));
-            const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-              headers: { "Authorization": `Bearer ${key}` }
-            });
-            if (!checkRes.ok) {
-              fetchFailedCount++;
-              if (fetchFailedCount > 3) {
-                jobError = true;
-                break;
-              }
-              continue;
-            }
-            fetchFailedCount = 0;
-            const checkData = await checkRes.json();
-            const status = checkData.data.status;
-
-            if (status === 'finished') {
-              finished = true;
-              const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-              if (exportTask && exportTask.result && exportTask.result.files && exportTask.result.files.length > 0) {
-                exportUrl = exportTask.result.files[0].url;
-                jobSuccess = true;
-              } else {
-                jobError = true;
-              }
-            } else if (status === 'error') {
-              jobError = true;
-            }
-          }
-          if (jobSuccess) break;
-        } catch (e) {
-          continue;
-        }
-      }
-      if (jobSuccess) break;
-    }
-
-    if (!jobSuccess || !exportUrl) throw new Error("Echek jeneral konpresyon");
+    const exportUrl = await runCloudConvertJob([jobPayloadWithParams, jobPayloadSimple]);
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const dlRes = await fetch(exportUrl);
@@ -1636,57 +1622,7 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
       input: "merge-1"
     };
 
-    const validKeys = CLOUDCONVERT_KEYS;
-    if (validKeys.length === 0) throw new Error("Echek");
-
-    let exportUrl = null;
-    let jobSuccess = false;
-
-    for (const key of validKeys) {
-      try {
-        const ccRes = await fetch("https://api.cloudconvert.com/v2/jobs", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${key}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ tasks: tasksPayload })
-        });
-        
-        if (!ccRes.ok) continue;
-        
-        const jobData = await ccRes.json();
-        const jobId = jobData.data.id;
-        
-        let finished = false;
-        let jobError = false;
-        while (!finished && !jobError) {
-          await new Promise(r => setTimeout(r, 2000));
-          const checkRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-            headers: { "Authorization": `Bearer ${key}` }
-          });
-          if (!checkRes.ok) {
-            jobError = true;
-            break;
-          }
-          const checkData = await checkRes.json();
-          const status = checkData.data.status;
-          if (status === 'finished') {
-            finished = true;
-            const exportTask = checkData.data.tasks.find(t => t.name === 'export-1');
-            exportUrl = exportTask.result.files[0].url;
-            jobSuccess = true;
-          } else if (status === 'error') {
-            jobError = true;
-          }
-        }
-        if (jobSuccess) break;
-      } catch (e) {
-        continue;
-      }
-    }
-    
-    if (!jobSuccess || !exportUrl) throw new Error("Echek");
+    const exportUrl = await runCloudConvertJob([{ tasks: tasksPayload }]);
     
     if (taskId) tasks.set(taskId, { step: 'sovgade' });
     const dlRes = await fetch(exportUrl);
