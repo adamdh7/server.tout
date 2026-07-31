@@ -924,7 +924,7 @@ Time: ${getFormattedDate()}
         }
         
         try {
-          const aiFinalRaw = await fetchAIFallback(currentModel, { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, temperature: 0.3, stream: true }, signal);
+          const aiFinalRaw = await fetchAIFallback('@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', { messages: [{ role: 'system', content: finalSystemPrompt }, ...context], max_tokens: 3000, temperature: 0.3, stream: true }, signal);
           if (!aiFinalRaw) {
             if (!signal.aborted) res.write(JSON.stringify({ type: 'error', content: 'Sistèm sa a pa disponib kounye a.' }) + '\n');
             return;
@@ -1282,6 +1282,40 @@ app.post('/compress', requireAuth, async (req, res) => {
     const parsed = path.parse(origFilename);
     const safeName = parsed.name || "compressed";
     let finalRequestedName = `${safeName}.${outFormat}`;
+
+    if (FFMPEG_AVAILABLE) {
+      const tmpIn = path.join(os.tmpdir(), `in-comp-${Date.now()}-${Math.floor(Math.random()*1000)}${isVideo ? '.mp4' : '.jpg'}`);
+      const tmpOut = path.join(os.tmpdir(), `out-comp-${Date.now()}-${Math.floor(Math.random()*1000)}${isVideo ? '.mp4' : '.jpg'}`);
+      fs.writeFileSync(tmpIn, buffer);
+      if (taskId) tasks.set(taskId, { step: 'konpresyon' });
+
+      try {
+        await new Promise((resolve, reject) => {
+          let args = [];
+          if (isVideo) {
+            args = ['-nostdin', '-i', tmpIn, '-vcodec', 'libx264', '-crf', '28', '-preset', 'fast', '-acodec', 'aac', '-b:a', '64k', '-vf', 'scale=\'min(1280,iw)\':-2', '-y', tmpOut];
+          } else {
+            args = ['-nostdin', '-i', tmpIn, '-q:v', '5', '-y', tmpOut];
+          }
+          const child = spawn('ffmpeg', args, { stdio: 'ignore' });
+          child.on('close', code => {
+            if (code === 0) resolve(); else reject(new Error('Erè lokal ffmpeg'));
+          });
+          child.on('error', reject);
+        });
+
+        const outBuf = fs.readFileSync(tmpOut);
+        if (taskId) tasks.set(taskId, { step: 'sovgade' });
+        const finalUrl = await uploadToBref(outBuf, finalRequestedName);
+        fs.unlinkSync(tmpIn);
+        fs.unlinkSync(tmpOut);
+        if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
+        return res.json({ url: finalUrl });
+      } catch (localErr) {
+        try { if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn); } catch (e) {}
+        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e) {}
+      }
+    }
     
     if (taskId) tasks.set(taskId, { step: 'telechargement' });
     const sourceExt = isVideo ? 'mp4' : 'png';
@@ -1517,23 +1551,36 @@ app.post('/upload', requireAuth, async (req, res) => {
 app.post('/code/search', requireAuth, (req, res) => {
   try {
     const bodyCode = req.body.code || '';
-    const query = (req.body.query || '').toLowerCase();
-    const lines = bodyCode.split('\n');
+    const query = (req.body.query || '').toLowerCase().trim();
+    if (!query) return res.json({ results: [] });
+    
+    const lines = bodyCode.split(/\r?\n/);
     const results = [];
     const qWords = query.split(/\s+/).filter(Boolean);
+    
     lines.forEach((line, index) => {
+      const originalLine = line;
       const t = line.toLowerCase();
       let score = 0;
-      if (t === query) score += 5000;
-      if (t.includes(query)) score += 1000;
+      
+      if (t === query) score += 10000;
+      if (t.includes(query)) score += 5000;
+      
       let wordMatches = 0;
-      qWords.forEach(w => { if (t.includes(w)) wordMatches++; });
-      score += (wordMatches * 100);
-      let charMatches = 0;
-      for (let i = 0; i < query.length; i++) { if (t.includes(query[i])) charMatches++; }
-      score += charMatches;
-      if (score > (query.length * 0.5) && line.trim().length > 0) results.push({ text: `${index + 1} : ${line.trim()}`, score });
+      qWords.forEach(w => {
+        if (t.includes(w)) wordMatches++;
+      });
+      
+      if (wordMatches > 0) {
+        score += (wordMatches * 100);
+        if (wordMatches === qWords.length) score += 1000;
+      }
+      
+      if (score > 0 && originalLine.trim().length > 0) {
+        results.push({ text: `${index + 1} : ${originalLine.trim()}`, score });
+      }
     });
+    
     results.sort((a, b) => b.score - a.score);
     res.json({ results: results.map(r => r.text) });
   } catch (e) {
@@ -1607,6 +1654,39 @@ app.post('/images-to-pdf', requireAuth, async (req, res) => {
     if (urls.length === 0) return res.status(400).json({ error: 'Ou pa voye okenn imaj' });
     
     if (taskId) tasks.set(taskId, { step: 'jenere_pdf' });
+
+    try {
+      const { jsPDF } = require('jspdf');
+      const pdf = new jsPDF();
+      
+      for (let i = 0; i < urls.length; i++) {
+        const imgRes = await fetch(urls[i]);
+        if (!imgRes.ok) continue;
+        const arrayBuf = await imgRes.arrayBuffer();
+        const base64 = Buffer.from(arrayBuf).toString('base64');
+        
+        let format = 'JPEG';
+        if (urls[i].toLowerCase().endsWith('.png')) format = 'PNG';
+        if (urls[i].toLowerCase().endsWith('.webp')) format = 'WEBP';
+        
+        if (i > 0) pdf.addPage();
+        
+        const props = pdf.getImageProperties(`data:image/${format.toLowerCase()};base64,${base64}`);
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = (props.height * pdfWidth) / props.width;
+        
+        pdf.addImage(`data:image/${format.toLowerCase()};base64,${base64}`, format, 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      }
+      
+      const pdfBuffer = Buffer.from(pdf.output('arraybuffer'));
+      if (taskId) tasks.set(taskId, { step: 'sovgade' });
+      
+      const finalUrl = await uploadToBref(pdfBuffer, 'document.pdf');
+      if (taskId) tasks.set(taskId, { step: 'fini', url: finalUrl });
+      return res.json({ url: finalUrl });
+      
+    } catch (localErr) {
+    }
     
     const tasksPayload = {};
     const mergeInputs = [];
