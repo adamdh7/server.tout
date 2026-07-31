@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "description": "Simple Node.js server for uploading files to Cloudflare R2 with static frontend serving",
   "main": "index.js",
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "scripts": {
     "start": "node index.js"
   },
@@ -13,6 +10,7 @@
     "@aws-sdk/client-s3": "^3.658.1",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "jspdf": "^2.5.1",
     "mongodb": "^6.5.0"
   },
   "devDependencies": {},
