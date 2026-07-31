@@ -809,7 +809,7 @@ app.post('/ai', requireAuth, async (req, res) => {
     
     const context = validContext.reverse();
     
-    const currentModel = '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b';
+    const currentModel = '@cf/meta/llama-3.1-70b-instruct';
 
     const systemPrompt = `You are Asistan.
 
